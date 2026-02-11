@@ -1,0 +1,90 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id         String    @id @default(cuid())
+  telegramId BigInt    @unique
+  createdAt  DateTime  @default(now())
+  profile    Profile?
+  workouts   Workout[]
+  fatigue    Fatigue[]
+  processedMessages ProcessedMessage[]
+
+  @@index([telegramId])
+}
+
+model Profile {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ftp           Int      @default(355)
+  timezone      String   @default("Europe/Prague")
+  swimDays      Json     @default("[\"Wed\",\"Fri\",\"Sun_optional\"]")
+  bikeVo2Day    String   @default("Thu")
+  longBikeDay   String   @default("Sun")
+  noLongRunDay  String   @default("Sun")
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId])
+}
+
+enum Sport {
+  swim
+  bike
+  run
+  strength
+  rest
+}
+
+enum Intensity {
+  z1
+  z2
+  z3
+  z4
+  z5
+}
+
+model Workout {
+  id          String     @id @default(cuid())
+  userId      String
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sport       Sport
+  durationMin Int
+  intensity   Intensity?
+  date        String     // YYYY-MM-DD format
+  createdAt   DateTime   @default(now())
+
+  @@index([userId, date])
+  @@index([userId])
+}
+
+model Fatigue {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date       String   // YYYY-MM-DD format
+  readiness  Int?     // 1-5 scale
+  sleepScore Int?     // 1-100 scale
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}
+
+// For idempotency - track processed Telegram messages
+model ProcessedMessage {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  telegramMessageId Int
+  processedAt     DateTime @default(now())
+
+  @@unique([userId, telegramMessageId])
+  @@index([userId])
+}

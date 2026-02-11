@@ -1,0 +1,9 @@
+node_modules
+dist
+coverage
+.turbo
+*.log
+.env
+.env.*
+package-lock.json
+pnpm-lock.yaml
