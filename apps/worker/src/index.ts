@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { Worker, Job } from 'bullmq';
-import { Bot, Api } from 'grammy';
+import { Bot } from 'grammy';
 import { getConfig } from '@triathlon/core';
 import type { CommandJob } from '@triathlon/core';
 import { logger } from './logger';
@@ -24,7 +24,7 @@ const api = bot.api;
 const worker = new Worker<CommandJob>(
   'commands',
   async (job: Job<CommandJob>) => {
-    const { telegramChatId, telegramUserId, messageId, commandName, args, rawText } = job.data;
+    const { telegramChatId, telegramUserId, messageId, commandName, args } = job.data;
 
     logger.info(
       {
@@ -51,11 +51,11 @@ const worker = new Worker<CommandJob>(
 
       switch (commandName) {
         case 'start':
-          response = await handleStart(user);
+          response = handleStart(user);
           break;
 
         case 'profile':
-          response = await handleProfile(user);
+          response = handleProfile(user);
           break;
 
         case 'set':
@@ -106,7 +106,7 @@ const worker = new Worker<CommandJob>(
 
         case 'unknown':
         default:
-          response = await handleUnknown();
+          response = handleUnknown();
           break;
       }
 
@@ -183,5 +183,5 @@ async function shutdown() {
   process.exit(0);
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', () => void shutdown());
+process.on('SIGTERM', () => void shutdown());

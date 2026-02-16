@@ -27,16 +27,14 @@ jobs:
       - name: Generate Prisma Client
         run: npm run db:generate
 
-      - name: Type check
-        run: npx tsc --noEmit
+      - name: Lint
+        run: npm run lint
 
-      - name: Check formatting (if prettier configured)
-        run: |
-          if [ -f ".prettierrc" ] || [ -f "prettier.config.js" ]; then
-            npx prettier --check "**/*.{ts,js,json,md}"
-          else
-            echo "No prettier config found, skipping"
-          fi
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Check formatting
+        run: npm run format:check
         continue-on-error: true
 
   test:

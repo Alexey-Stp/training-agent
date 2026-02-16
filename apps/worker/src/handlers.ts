@@ -1,6 +1,6 @@
 import { format, subDays } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
-import type { User, Profile, Prisma } from '@prisma/client';
+import type { User, Profile } from '@prisma/client';
 import {
   generateDraftPlan,
   applyRules,
@@ -9,13 +9,14 @@ import {
   RulesContext,
   Sport,
   Intensity,
+  Session,
 } from '@triathlon/core';
 import { prisma } from './db';
 import { logger } from './logger';
 
 type UserWithProfile = User & { profile: Profile | null };
 
-export async function handleStart(user: UserWithProfile): Promise<string> {
+export function handleStart(user: UserWithProfile): string {
   const profileInfo = user.profile
     ? `\n\n📊 Your current profile:\n• FTP: ${user.profile.ftp}W\n• Timezone: ${user.profile.timezone}`
     : '';
@@ -37,7 +38,7 @@ Available commands:
 ${profileInfo}`;
 }
 
-export async function handleProfile(user: UserWithProfile): Promise<string> {
+export function handleProfile(user: UserWithProfile): string {
   if (!user.profile) {
     return '❌ No profile found. Use /start to create one.';
   }
@@ -100,8 +101,8 @@ export async function handlePlan(user: UserWithProfile): Promise<string> {
   let response = `📅 7-Day Training Plan (starting ${format(now, 'PPP')})\n\n`;
 
   // Group by date
-  const sessionsByDate = new Map<string, typeof plan.sessions>();
-  plan.sessions.forEach((session) => {
+  const sessionsByDate = new Map<string, Session[]>();
+  plan.sessions.forEach((session: Session) => {
     const existing = sessionsByDate.get(session.date) || [];
     existing.push(session);
     sessionsByDate.set(session.date, existing);
@@ -117,7 +118,7 @@ export async function handlePlan(user: UserWithProfile): Promise<string> {
 
     response += `\n${dayName} ${format(dateObj, 'MMM d')}:\n`;
 
-    sessions.forEach((session) => {
+    sessions.forEach((session: Session) => {
       const icon = getSportIcon(session.sport);
       const optional = session.tags?.includes('optional') ? ' (optional)' : '';
       response += `  ${icon} ${session.title}${optional}\n`;
@@ -132,7 +133,7 @@ export async function handlePlan(user: UserWithProfile): Promise<string> {
   // Add warnings if any
   if (plan.warnings.length > 0) {
     response += '\n⚠️ Adjustments:\n';
-    plan.warnings.forEach((warning) => {
+    plan.warnings.forEach((warning: string) => {
       response += `${warning}\n`;
     });
   }
@@ -177,7 +178,7 @@ export async function handleLog(
   return `✅ Logged ${icon} ${sport} workout: ${durationMin}min${intensityStr} on ${format(now, 'PPP')}`;
 }
 
-export async function handleUnknown(): Promise<string> {
+export function handleUnknown(): string {
   return `❓ I didn't understand that command.
 
 Available commands:
@@ -210,15 +211,18 @@ async function getRulesContext(userId: string, startDate: string): Promise<Rules
 
   const totalMinutes = workouts.reduce((sum, w) => sum + w.durationMin, 0);
 
-  const byDate = workouts.reduce((acc, w) => {
-    const existing = acc.find((x) => x.date === w.date);
-    if (existing) {
-      existing.minutes += w.durationMin;
-    } else {
-      acc.push({ date: w.date, minutes: w.durationMin });
-    }
-    return acc;
-  }, [] as { date: string; minutes: number }[]);
+  const byDate = workouts.reduce(
+    (acc, w) => {
+      const existing = acc.find((x) => x.date === w.date);
+      if (existing) {
+        existing.minutes += w.durationMin;
+      } else {
+        acc.push({ date: w.date, minutes: w.durationMin });
+      }
+      return acc;
+    },
+    [] as { date: string; minutes: number }[]
+  );
 
   // Get today's fatigue if exists
   const fatigue = await prisma.fatigue.findUnique({

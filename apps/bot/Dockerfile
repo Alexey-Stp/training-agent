@@ -22,8 +22,6 @@ WORKDIR /app
 
 # Copy dependencies
 COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/packages/core/node_modules ./packages/core/node_modules
-COPY --from=deps /app/apps/bot/node_modules ./apps/bot/node_modules
 
 # Copy source code
 COPY package*.json ./
@@ -52,10 +50,8 @@ ENV NODE_ENV=production
 # Copy necessary files
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/packages/core/dist ./packages/core/dist
-COPY --from=builder /app/packages/core/node_modules ./packages/core/node_modules
 COPY --from=builder /app/packages/core/package.json ./packages/core/
 COPY --from=builder /app/apps/bot/dist ./apps/bot/dist
-COPY --from=builder /app/apps/bot/node_modules ./apps/bot/node_modules
 COPY --from=builder /app/apps/bot/package.json ./apps/bot/
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/package.json ./

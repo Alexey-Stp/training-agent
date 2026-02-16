@@ -1,5 +1,4 @@
 import { addDays, format, getDay } from 'date-fns';
-import { toZonedTime } from 'date-fns-tz';
 import { Sport, Intensity, Session, WeekPlan, UserProfile } from './types';
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -164,7 +163,7 @@ export function addOptionalSundaySwim(plan: WeekPlan, profile: UserProfile): Wee
     return plan;
   }
 
-  const sundaySession = plan.sessions.find(s => {
+  const sundaySession = plan.sessions.find((s) => {
     const dayName = DAY_NAMES[getDay(new Date(s.date + 'T00:00:00'))];
     return dayName === 'Sun';
   });

@@ -4,7 +4,8 @@
   "main": "./dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
     "start": "node dist/index.js"
   },
   "dependencies": {
@@ -16,7 +17,7 @@
     "pino-pretty": "^10.3.1",
     "dotenv": "^16.3.1",
     "date-fns": "^3.0.6",
-    "date-fns-tz": "^2.0.0"
+    "date-fns-tz": "^3.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.6",

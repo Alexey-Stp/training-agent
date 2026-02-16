@@ -72,7 +72,7 @@ export const HARD_TAGS = new Set<string>(['vo2', 'threshold']);
 
 export function isHardSession(session: Session): boolean {
   if (HARD_INTENSITIES.has(session.intensity)) return true;
-  if (session.tags && session.tags.some(tag => HARD_TAGS.has(tag))) return true;
+  if (session.tags && session.tags.some((tag) => HARD_TAGS.has(tag))) return true;
   return false;
 }
 
@@ -82,5 +82,6 @@ export function downgradeToEasy(session: Session, reason: string): Session {
     intensity: Intensity.z2,
     title: `${session.title} (downgraded to Z2)`,
     notes: `${session.notes || ''}\nDowngraded: ${reason}`.trim(),
+    tags: session.tags?.filter((tag) => !HARD_TAGS.has(tag)),
   };
 }

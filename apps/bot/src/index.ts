@@ -99,12 +99,12 @@ async function start() {
 // Graceful shutdown
 process.once('SIGINT', () => {
   logger.info('Received SIGINT, stopping bot...');
-  bot.stop();
+  void bot.stop();
 });
 
 process.once('SIGTERM', () => {
   logger.info('Received SIGTERM, stopping bot...');
-  bot.stop();
+  void bot.stop();
 });
 
-start();
+void start();

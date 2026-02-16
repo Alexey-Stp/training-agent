@@ -1,15 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { applyRules } from '../src/rules-engine';
-import { WeekPlan, Session, Sport, Intensity, RulesContext } from '../src/types';
+import { WeekPlan, Sport, Intensity, RulesContext } from '../src/types';
 
 describe('Rules Engine', () => {
   describe('SwimRotation Rule', () => {
     it('should enforce Wed as technique and Fri as intervals', () => {
       const plan: WeekPlan = {
-        startDate: '2026-02-10', // Monday
+        startDate: '2026-02-09', // Monday
         sessions: [
           {
-            date: '2026-02-12', // Wed
+            date: '2026-02-11', // Wed
             sport: Sport.swim,
             title: 'Swim Workout',
             durationMin: 50,
@@ -17,7 +17,7 @@ describe('Rules Engine', () => {
             tags: ['intervals'], // Wrong - should be technique
           },
           {
-            date: '2026-02-14', // Fri
+            date: '2026-02-13', // Fri
             sport: Sport.swim,
             title: 'Swim Technique',
             durationMin: 50,
@@ -35,8 +35,8 @@ describe('Rules Engine', () => {
 
       const result = applyRules(plan, context);
 
-      const wedSession = result.sessions.find(s => s.date === '2026-02-12');
-      const friSession = result.sessions.find(s => s.date === '2026-02-14');
+      const wedSession = result.sessions.find((s) => s.date === '2026-02-11');
+      const friSession = result.sessions.find((s) => s.date === '2026-02-13');
 
       expect(wedSession?.tags).toContain('technique');
       expect(wedSession?.title).toContain('Technique');
@@ -84,8 +84,8 @@ describe('Rules Engine', () => {
 
       const result = applyRules(plan, context);
 
-      const todaySession = result.sessions.find(s => s.date === '2026-02-10');
-      const tomorrowSession = result.sessions.find(s => s.date === '2026-02-11');
+      const todaySession = result.sessions.find((s) => s.date === '2026-02-10');
+      const tomorrowSession = result.sessions.find((s) => s.date === '2026-02-11');
 
       expect(todaySession?.intensity).toBe(Intensity.z2);
       expect(todaySession?.title).toContain('downgraded');
@@ -165,14 +165,14 @@ describe('Rules Engine', () => {
 
       const result = applyRules(plan, context);
 
-      const monSession = result.sessions.find(s => s.date === '2026-02-10');
-      const tueSession = result.sessions.find(s => s.date === '2026-02-11');
+      const monSession = result.sessions.find((s) => s.date === '2026-02-10');
+      const tueSession = result.sessions.find((s) => s.date === '2026-02-11');
 
       expect(monSession?.intensity).toBe(Intensity.z5); // First hard session remains
       expect(tueSession?.intensity).toBe(Intensity.z2); // Second downgraded
       expect(tueSession?.title).toContain('downgraded');
 
-      expect(result.warnings.some(w => w.includes('back-to-back'))).toBe(true);
+      expect(result.warnings.some((w) => w.includes('back-to-back'))).toBe(true);
     });
 
     it('should allow hard sessions with easy day in between', () => {
@@ -212,12 +212,12 @@ describe('Rules Engine', () => {
 
       const result = applyRules(plan, context);
 
-      const monSession = result.sessions.find(s => s.date === '2026-02-10');
-      const wedSession = result.sessions.find(s => s.date === '2026-02-12');
+      const monSession = result.sessions.find((s) => s.date === '2026-02-10');
+      const wedSession = result.sessions.find((s) => s.date === '2026-02-12');
 
       expect(monSession?.intensity).toBe(Intensity.z5);
       expect(wedSession?.intensity).toBe(Intensity.z4);
-      expect(result.warnings.some(w => w.includes('back-to-back'))).toBe(false);
+      expect(result.warnings.some((w) => w.includes('back-to-back'))).toBe(false);
     });
 
     it('should handle multiple consecutive hard sessions', () => {
@@ -256,9 +256,9 @@ describe('Rules Engine', () => {
 
       const result = applyRules(plan, context);
 
-      const monSession = result.sessions.find(s => s.date === '2026-02-10');
-      const tueSession = result.sessions.find(s => s.date === '2026-02-11');
-      const wedSession = result.sessions.find(s => s.date === '2026-02-12');
+      const monSession = result.sessions.find((s) => s.date === '2026-02-10');
+      const tueSession = result.sessions.find((s) => s.date === '2026-02-11');
+      const wedSession = result.sessions.find((s) => s.date === '2026-02-12');
 
       expect(monSession?.intensity).toBe(Intensity.z4); // Stays hard
       expect(tueSession?.intensity).toBe(Intensity.z2); // Downgraded
@@ -310,8 +310,8 @@ describe('Rules Engine', () => {
       const maxAllowed = 200 * 1.1; // 220 minutes
 
       expect(totalPlannedMinutes).toBeLessThanOrEqual(maxAllowed);
-      expect(result.warnings.some(w => w.includes('Weekly load capped'))).toBe(true);
-      expect(result.appliedRules.some(r => r.includes('WeeklyLoadCap'))).toBe(true);
+      expect(result.warnings.some((w) => w.includes('Weekly load capped'))).toBe(true);
+      expect(result.appliedRules.some((r) => r.includes('WeeklyLoadCap'))).toBe(true);
     });
 
     it('should not scale down if within 110% limit', () => {
@@ -348,7 +348,7 @@ describe('Rules Engine', () => {
 
       expect(result.sessions[0].durationMin).toBe(50);
       expect(result.sessions[1].durationMin).toBe(50);
-      expect(result.warnings.some(w => w.includes('Weekly load capped'))).toBe(false);
+      expect(result.warnings.some((w) => w.includes('Weekly load capped'))).toBe(false);
     });
 
     it('should skip load cap if no previous week data', () => {
@@ -377,7 +377,7 @@ describe('Rules Engine', () => {
       const result = applyRules(plan, context);
 
       expect(result.sessions[0].durationMin).toBe(500); // Unchanged
-      expect(result.warnings.some(w => w.includes('Weekly load capped'))).toBe(false);
+      expect(result.warnings.some((w) => w.includes('Weekly load capped'))).toBe(false);
     });
 
     it('should maintain minimum 30 minutes per session', () => {
@@ -413,7 +413,7 @@ describe('Rules Engine', () => {
       const result = applyRules(plan, context);
 
       // All sessions should be at least 30 minutes
-      result.sessions.forEach(session => {
+      result.sessions.forEach((session) => {
         if (session.sport !== Sport.rest) {
           expect(session.durationMin).toBeGreaterThanOrEqual(30);
         }
@@ -424,10 +424,10 @@ describe('Rules Engine', () => {
   describe('Combined Rules Interactions', () => {
     it('should apply multiple rules correctly', () => {
       const plan: WeekPlan = {
-        startDate: '2026-02-10',
+        startDate: '2026-02-09',
         sessions: [
           {
-            date: '2026-02-10', // Mon - Hard
+            date: '2026-02-09', // Mon - Hard
             sport: Sport.bike,
             title: 'Bike VO2',
             durationMin: 200,
@@ -435,14 +435,14 @@ describe('Rules Engine', () => {
             tags: ['vo2'],
           },
           {
-            date: '2026-02-11', // Tue - Hard (will be downgraded by NoHardHard)
+            date: '2026-02-10', // Tue - Hard (will be downgraded by NoHardHard)
             sport: Sport.run,
             title: 'Run Intervals',
             durationMin: 200,
             intensity: Intensity.z4,
           },
           {
-            date: '2026-02-12', // Wed - Swim
+            date: '2026-02-11', // Wed - Swim
             sport: Sport.swim,
             title: 'Swim',
             durationMin: 200,
@@ -464,11 +464,11 @@ describe('Rules Engine', () => {
       const result = applyRules(plan, context);
 
       // Check SwimRotation was applied
-      const wedSession = result.sessions.find(s => s.date === '2026-02-12');
+      const wedSession = result.sessions.find((s) => s.date === '2026-02-11');
       expect(wedSession?.tags).toContain('technique');
 
       // Check NoHardHard was applied
-      const tueSession = result.sessions.find(s => s.date === '2026-02-11');
+      const tueSession = result.sessions.find((s) => s.date === '2026-02-10');
       expect(tueSession?.intensity).toBe(Intensity.z2);
 
       // Check WeeklyLoadCap was applied
