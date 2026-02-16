@@ -10,7 +10,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "date-fns": "^3.0.6",
+    "date-fns": "^4.1.0",
     "date-fns-tz": "^3.0.0",
     "zod": "^3.22.4"
   },
