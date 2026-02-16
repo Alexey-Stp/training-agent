@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { applyRules } from '../src/rules-engine';
-import { WeekPlan, Session, Sport, Intensity, RulesContext } from '../src/types';
+import { WeekPlan, Sport, Intensity, RulesContext } from '../src/types';
 
 describe('Rules Engine', () => {
   describe('SwimRotation Rule', () => {
