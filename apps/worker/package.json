@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -b",
-    "typecheck": "tsc -b --noEmit",
+    "typecheck": "tsc -b",
     "start": "node dist/index.js"
   },
   "dependencies": {
