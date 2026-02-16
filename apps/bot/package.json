@@ -15,7 +15,7 @@
     "bullmq": "^5.1.5",
     "pino": "^8.17.2",
     "pino-pretty": "^10.3.1",
-    "dotenv": "^16.3.1"
+    "dotenv": "^17.3.1"
   },
   "devDependencies": {
     "@types/node": "^20.10.6",
