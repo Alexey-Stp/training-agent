@@ -1,7 +1,8 @@
-import { WeekPlan, Session, RulesContext, isHardSession, downgradeToEasy, Intensity, Sport } from './types';
+import { parseISO, getDay } from 'date-fns';
+import { WeekPlan, RulesContext, isHardSession, downgradeToEasy, Intensity, Sport } from './types';
 
 export function applyRules(weekPlan: WeekPlan, context: RulesContext): WeekPlan {
-  let plan = { ...weekPlan, warnings: [], appliedRules: [] };
+  let plan: WeekPlan = { ...weekPlan, warnings: [], appliedRules: [] };
 
   // Apply rules in order
   plan = applySwimRotationRule(plan);
@@ -19,8 +20,8 @@ function applySwimRotationRule(plan: WeekPlan): WeekPlan {
   let modified = false;
 
   sessions.forEach((session, idx) => {
-    const date = new Date(session.date + 'T00:00:00');
-    const dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()];
+    const date = parseISO(session.date);
+    const dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][getDay(date)];
 
     if (session.sport === Sport.swim) {
       if (dayName === 'Wed' && !session.tags?.includes('technique')) {
@@ -62,7 +63,6 @@ function applyReadinessDownshiftRule(plan: WeekPlan, context: RulesContext): Wee
   const sessions = [...plan.sessions];
   const warnings = [...plan.warnings];
   const appliedRules = [...plan.appliedRules];
-  const today = new Date(plan.startDate + 'T00:00:00');
   const todayStr = plan.startDate;
 
   let modified = false;

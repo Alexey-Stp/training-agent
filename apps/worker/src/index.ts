@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { Worker, Job } from 'bullmq';
-import { Bot, Api } from 'grammy';
+import { Bot } from 'grammy';
 import { getConfig } from '@triathlon/core';
 import type { CommandJob } from '@triathlon/core';
 import { logger } from './logger';
@@ -24,7 +24,7 @@ const api = bot.api;
 const worker = new Worker<CommandJob>(
   'commands',
   async (job: Job<CommandJob>) => {
-    const { telegramChatId, telegramUserId, messageId, commandName, args, rawText } = job.data;
+    const { telegramChatId, telegramUserId, messageId, commandName, args } = job.data;
 
     logger.info(
       {

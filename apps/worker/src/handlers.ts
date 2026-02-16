@@ -1,6 +1,6 @@
 import { format, subDays } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
-import type { User, Profile, Prisma } from '@prisma/client';
+import type { User, Profile } from '@prisma/client';
 import {
   generateDraftPlan,
   applyRules,
@@ -101,7 +101,7 @@ export async function handlePlan(user: UserWithProfile): Promise<string> {
 
   // Group by date
   const sessionsByDate = new Map<string, typeof plan.sessions>();
-  plan.sessions.forEach((session) => {
+  plan.sessions.forEach((session: any) => {
     const existing = sessionsByDate.get(session.date) || [];
     existing.push(session);
     sessionsByDate.set(session.date, existing);
@@ -117,7 +117,7 @@ export async function handlePlan(user: UserWithProfile): Promise<string> {
 
     response += `\n${dayName} ${format(dateObj, 'MMM d')}:\n`;
 
-    sessions.forEach((session) => {
+    sessions.forEach((session: any) => {
       const icon = getSportIcon(session.sport);
       const optional = session.tags?.includes('optional') ? ' (optional)' : '';
       response += `  ${icon} ${session.title}${optional}\n`;
@@ -132,7 +132,7 @@ export async function handlePlan(user: UserWithProfile): Promise<string> {
   // Add warnings if any
   if (plan.warnings.length > 0) {
     response += '\n⚠️ Adjustments:\n';
-    plan.warnings.forEach((warning) => {
+    plan.warnings.forEach((warning: string) => {
       response += `${warning}\n`;
     });
   }
@@ -210,15 +210,18 @@ async function getRulesContext(userId: string, startDate: string): Promise<Rules
 
   const totalMinutes = workouts.reduce((sum, w) => sum + w.durationMin, 0);
 
-  const byDate = workouts.reduce((acc, w) => {
-    const existing = acc.find((x) => x.date === w.date);
-    if (existing) {
-      existing.minutes += w.durationMin;
-    } else {
-      acc.push({ date: w.date, minutes: w.durationMin });
-    }
-    return acc;
-  }, [] as { date: string; minutes: number }[]);
+  const byDate = workouts.reduce(
+    (acc, w) => {
+      const existing = acc.find((x) => x.date === w.date);
+      if (existing) {
+        existing.minutes += w.durationMin;
+      } else {
+        acc.push({ date: w.date, minutes: w.durationMin });
+      }
+      return acc;
+    },
+    [] as { date: string; minutes: number }[]
+  );
 
   // Get today's fatigue if exists
   const fatigue = await prisma.fatigue.findUnique({
