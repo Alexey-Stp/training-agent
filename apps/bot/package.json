@@ -4,8 +4,8 @@
   "main": "./dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
-    "typecheck": "tsc --noEmit",
+    "build": "tsc -b",
+    "typecheck": "tsc -b --noEmit",
     "start": "node dist/index.js"
   },
   "dependencies": {
