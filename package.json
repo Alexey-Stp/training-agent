@@ -10,7 +10,7 @@
   "scripts": {
     "dev:bot": "npm -w @triathlon/bot run dev",
     "dev:worker": "npm -w @triathlon/worker run dev",
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm -w @triathlon/core run build && npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:watch": "npm -w @triathlon/core run test:watch",
     "lint": "eslint . --ext .ts",
