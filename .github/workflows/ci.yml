@@ -196,7 +196,7 @@ jobs:
 
       - name: Verify database connection
         run: |
-          npx prisma db execute --stdin --schema=./prisma/schema.prisma <<EOF
+          npx prisma db execute --stdin <<EOF
           SELECT 1;
           EOF
         env:
