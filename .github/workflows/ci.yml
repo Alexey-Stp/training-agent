@@ -11,6 +11,9 @@ jobs:
     name: Lint & Type Check
     runs-on: ubuntu-latest
 
+    env:
+      DATABASE_URL: postgresql://user:pass@localhost:5432/dummy
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -40,6 +43,9 @@ jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
+
+    env:
+      DATABASE_URL: postgresql://user:pass@localhost:5432/dummy
 
     steps:
       - name: Checkout code
@@ -72,6 +78,9 @@ jobs:
     name: Build All Packages
     runs-on: ubuntu-latest
 
+    env:
+      DATABASE_URL: postgresql://user:pass@localhost:5432/dummy
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -100,6 +109,9 @@ jobs:
   docker-build:
     name: Docker Build Test
     runs-on: ubuntu-latest
+
+    env:
+      DATABASE_URL: postgresql://user:pass@localhost:5432/dummy
 
     steps:
       - name: Checkout code
