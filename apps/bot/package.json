@@ -11,7 +11,7 @@
   "dependencies": {
     "@triathlon/core": "*",
     "@prisma/client": "^7.4.0",
-    "grammy": "^1.19.2",
+    "grammy": "^1.41.1",
     "bullmq": "^5.1.5",
     "pino": "^8.17.2",
     "pino-pretty": "^13.1.3",
