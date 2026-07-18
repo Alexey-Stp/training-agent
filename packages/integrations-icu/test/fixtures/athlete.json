@@ -1,0 +1,9 @@
+{
+  "id": "i12345",
+  "name": "Jane Athlete",
+  "email": "jane@example.com",
+  "sex": "F",
+  "dob": "1990-06-15",
+  "city": "Prague",
+  "country": "CZ"
+}
