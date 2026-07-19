@@ -1,0 +1,23 @@
+[
+  {
+    "id": "2024-01-15",
+    "ctl": 52.3,
+    "atl": 58.1,
+    "rampRate": -0.8,
+    "restingHR": 48,
+    "hrv": 72,
+    "sleep": 7.5,
+    "sleepScore": 88,
+    "weight": 68.5
+  },
+  {
+    "id": "2024-01-16",
+    "ctl": 51.8,
+    "atl": 57.4,
+    "rampRate": -0.6,
+    "restingHR": 47,
+    "hrv": 75,
+    "sleep": 8.0,
+    "sleepScore": 91
+  }
+]

@@ -111,6 +111,36 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 - Fully tested (see `test/rules-engine.test.ts`)
 - Type-safe (strict TypeScript)
 
+### integrations-icu Package (`packages/integrations-icu`)
+
+**Responsibility**: Typed, rate-limited HTTP client for the [intervals.icu](https://intervals.icu) REST API.
+
+**Key Files**:
+- `src/client.ts` - `IcuClient` class exposing all methods; injectable fetch for testability
+- `src/schemas.ts` - Zod v4 schemas for Athlete, Activity, Wellness, Event (`.passthrough()` to tolerate unknown fields)
+- `src/errors.ts` - Typed errors: `IcuRateLimitError`, `IcuAuthError`, `IcuContractError`
+- `test/fixtures/` - JSON fixtures for unit tests
+
+**Public API**:
+| Method | HTTP | Description |
+|---|---|---|
+| `getAthlete()` | GET `/athlete/:id` | Fetch the authenticated athlete's profile |
+| `listActivities(oldest, newest)` | GET `/athlete/:id/activities` | Activities in date range |
+| `listWellness(oldest, newest)` | GET `/athlete/:id/wellness` | Wellness/HRV data in date range |
+| `listEvents()` | GET `/athlete/:id/events` | Calendar events |
+| `createEvent(data)` | POST `/athlete/:id/events` | Create a new calendar event |
+| `updateEvent(id, data)` | PUT `/athlete/:id/events/:id` | Update an existing event |
+| `deleteEvent(id)` | DELETE `/athlete/:id/events/:id` | Delete a calendar event |
+
+**Auth**: HTTP Basic with username `API_KEY` and password = athlete API key. Configured via `ICU_ATHLETE_ID` / `ICU_API_KEY` env vars.
+
+**Retry strategy**: Exponential backoff (max 3 retries) on 429 and 5xx responses. 401 throws `IcuAuthError` immediately (no retry). After exhausting retries on 429, throws `IcuRateLimitError`. Malformed responses throw `IcuContractError` with the endpoint name.
+
+**Design Principles**:
+- All ICU access goes through one typed client (single place for auth, retry, error mapping)
+- No DB persistence — pure network layer
+- Fully tested (see `test/client.test.ts`)
+
 ### Database Schema (`prisma/schema.prisma`)
 
 **Tables**:

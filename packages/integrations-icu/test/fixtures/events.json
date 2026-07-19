@@ -1,0 +1,18 @@
+[
+  {
+    "id": 1001,
+    "start_date_local": "2024-01-20",
+    "name": "Sprint Race A",
+    "type": "Race",
+    "end_date_local": "2024-01-20",
+    "description": "Local sprint triathlon"
+  },
+  {
+    "id": 1002,
+    "start_date_local": "2024-01-28",
+    "name": "Training Camp",
+    "type": "Note",
+    "end_date_local": "2024-01-30",
+    "description": "5-day altitude camp"
+  }
+]
