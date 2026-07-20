@@ -25,7 +25,7 @@
     "db:studio": "prisma studio"
   },
   "devDependencies": {
-    "@types/node": "^25.5.0",
+    "@types/node": "^26.1.1",
     "@typescript-eslint/eslint-plugin": "^8.56.0",
     "@typescript-eslint/parser": "^8.57.0",
     "eslint": "^8.56.0",
