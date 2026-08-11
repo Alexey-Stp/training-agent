@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@triathlon/core": "*",
-    "@prisma/client": "^7.4.0",
+    "@prisma/client": "^7.9.1",
     "grammy": "^1.41.1",
     "bullmq": "^5.1.5",
     "pino": "^10.3.1",
