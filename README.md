@@ -116,6 +116,9 @@ See [CI_CD.md](CI_CD.md) for complete CI/CD documentation.
 - `/set ftp <number>` - Update FTP (e.g., `/set ftp 280`)
 - `/plan` - Generate 7-day training plan with rules applied
 - `/log <sport> <minutes> [intensity]` - Log completed workout
+- `/connect icu` - Link your intervals.icu account (asks for athlete ID, then API key)
+- `/connect status` - Show the linked athlete, masked API key and last sync times
+- `/disconnect icu` - Remove the link and the stored API key
 
 ### Default Profile
 
@@ -144,9 +147,19 @@ The plan generator applies these rules automatically:
 
 ## intervals.icu Integration
 
-`packages/integrations-icu` (`@triathlon/integrations-icu`) is a typed REST client for [intervals.icu](https://intervals.icu). The bot and worker do not use it yet. Sync jobs and persistence come in E1-T3/T4.
+`packages/integrations-icu` (`@triathlon/integrations-icu`) is a typed REST client for [intervals.icu](https://intervals.icu). The worker uses it to validate credentials in `/connect icu`. Sync jobs come in E1-T3/T4.
 
-- **Auth**: HTTP Basic, username `API_KEY`, password = athlete API key. Set `ICU_ATHLETE_ID` and `ICU_API_KEY` in `.env` (see `.env.example`).
+### Linking an account
+
+1. `/connect icu`. The bot asks for your athlete ID (intervals.icu → Settings → Developer Settings, e.g. `i12345`).
+2. Send the athlete ID, then your API key. The bot deletes the key message immediately and encrypts the key before it is queued.
+3. The worker calls `getAthlete`. On success the connection is stored in `IcuConnection` with the key encrypted (AES-256-GCM). On failure you get an error message and nothing is stored.
+
+Set `SECRETS_ENC_KEY` in `.env` (base64 of 32 bytes: `openssl rand -base64 32`). Both bot and worker need it. To rotate, move the old key to `SECRETS_ENC_KEY_PREVIOUS` and set a new `SECRETS_ENC_KEY`.
+
+### Client
+
+- **Auth**: HTTP Basic, username `API_KEY`, password = athlete API key. Per-athlete credentials come from `/connect icu`. `ICU_ATHLETE_ID` / `ICU_API_KEY` in `.env` are only for local experiments.
 - **Methods**: `getAthlete`, `listActivities(oldest, newest)`, `listWellness(oldest, newest)`, `listEvents(oldest?, newest?)`, `createEvent`, `updateEvent`, `deleteEvent`.
 - **Resilience**: exponential backoff, up to 3 retries on 429/5xx. Responses are validated with Zod, and unknown fields are allowed.
 - **Errors**: `IcuAuthError` (401, no retry), `IcuRateLimitError` (429 after retries), `IcuServerError` (5xx after retries), `IcuHttpError` (other 4xx), `IcuContractError` (response failed schema validation, includes the endpoint name).
@@ -208,8 +221,11 @@ pnpm install
 # Start all services (postgres, redis, bot, worker)
 docker compose up --build
 
-# First time: Run database migrations in another terminal
-docker compose exec bot npx prisma migrate dev --name init
+# First time: Apply database migrations in another terminal
+docker compose exec bot npx prisma migrate deploy
+
+# Existing database created with `db push`? Baseline it once first:
+# docker compose exec bot npx prisma migrate resolve --applied 0_init
 
 # Or push schema without migration (faster for dev)
 docker compose exec bot npx prisma db push

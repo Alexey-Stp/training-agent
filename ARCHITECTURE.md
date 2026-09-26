@@ -66,11 +66,12 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 
 - `index.ts` - Main bot initialization with grammY
 - `parser.ts` - Command parsing and validation
-- `queue.ts` - BullMQ queue setup
+- `queue.ts` - BullMQ queue setup (`enqueueCommand`)
+- `connect-dialog.ts` - `/connect icu` two-step dialog (state in Redis, key `icu-connect:<telegramUserId>`, 10 min TTL)
 
 **Design Principles**:
 
-- Thin layer - no business logic
+- Thin layer - no business logic, with one exception: the `/connect icu` dialog (see [Athlete linking](#athlete-linking-connect-icu))
 - Fast acknowledgment to user (reaction emoji)
 - Resilient error handling (never crash on bad input)
 - All requests go through queue for consistency
@@ -89,7 +90,8 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 
 - `index.ts` - BullMQ worker setup and job processing
 - `handlers.ts` - Command handler implementations
-- `db.ts` - Database utilities (user creation, deduplication)
+- `icu-connect.ts` - `connect_icu` / `/connect status` / `/disconnect icu` handlers (injected repo + ICU client for testing)
+- `db.ts` - Database utilities (user creation, deduplication, `icuConnectionRepo`)
 
 **Design Principles**:
 
@@ -107,7 +109,9 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 **Key Files**:
 
 - `types.ts` - Domain models (Session, WeekPlan, UserProfile, etc.)
-- `config.ts` - Environment variable validation (Zod)
+- `config.ts` - Environment variable validation (Zod), `getEncKeys()` keyring
+- `crypto.ts` - AES-256-GCM `encryptSecret` / `decryptSecret` (rotation-ready keyring), `maskSecret`
+- `logger.ts` - `createLogger()` shared pino setup with `LOG_REDACT_PATHS`
 - `plan-generator.ts` - Draft plan generation from template
 - `rules-engine.ts` - Plan validation and adjustments
 
@@ -175,9 +179,32 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
    - Prevents duplicate workout logs
    - Unique on (userId, telegramMessageId)
 
+6. **IcuConnection** - intervals.icu account link
+   - `icuAthleteId`, `icuAthleteName`, `apiKeyCiphertext` (base64 ciphertext‖GCM tag), `apiKeyIv`
+   - `lastActivitySyncAt`, `lastWellnessSyncAt` (set by future sync jobs)
+   - Unique on userId: one connection per user, re-linking overwrites
+
+**Migrations**: `prisma/migrations/` starts with `0_init` (baseline of the pre-TA-9 schema), followed by `1_icu_connection`. Apply with `npm run db:deploy`. A database created earlier with `db push` must be baselined once: `npx prisma migrate resolve --applied 0_init`, then `npm run db:deploy`.
+
 **Indices**: Optimized for common queries (last 7 days workouts, user lookup)
 
 ## Data Flow
+
+### Athlete linking (`/connect icu`)
+
+```
+/connect icu      → bot: state {step: athleteId} in Redis → prompt
+i12345            → bot: validate, state {step: apiKey, athleteId} → prompt
+<api key>         → bot: encryptSecret(key, SECRETS_ENC_KEY), delete the user's message,
+                    clear state, enqueue {commandName: 'connect_icu', icuCredentials: {athleteId, ciphertext, iv}}
+worker            → decryptSecret → IcuClient.getAthlete()
+                    ok  → upsert IcuConnection (ciphertext as received), reply "Connected as <name>"
+                    401 / 403 / 404 / 429 / 5xx → friendly reply, nothing stored, no BullMQ retry
+/connect status   → worker: athlete name, masked key (last 4 chars), last sync times
+/disconnect icu   → worker: delete the IcuConnection row
+```
+
+The dialog runs in the bot so the plaintext key never reaches the BullMQ payload (Redis keeps failed jobs for 24h). Dialog state holds only the athlete ID. `/cancel`, or any other command, abandons the dialog.
 
 ### Example: `/plan` Command
 
@@ -374,6 +401,19 @@ const validatedPlan = applyRules(llmPlan, context);
 - All config via env vars
 - .env.example for documentation only
 
+✅ **Encrypted Credentials**
+
+- intervals.icu API keys are stored with AES-256-GCM (`packages/core/src/crypto.ts`), with the key from `SECRETS_ENC_KEY`
+- Rotation: set the new key as `SECRETS_ENC_KEY` and the old one as `SECRETS_ENC_KEY_PREVIOUS`. Decryption tries both keys; new writes use the current key
+- The key is encrypted in the bot before enqueueing, and the user's Telegram message containing it is deleted
+- Keys are never echoed back; `/connect status` shows only the last 4 characters
+
+✅ **Log Redaction**
+
+- All loggers come from `createLogger()` in core, with pino `redact` on `LOG_REDACT_PATHS` (`apiKey`, `icuCredentials`, `rawText`, `args`, `message.text`, `authorization` headers, …)
+- The bot logs update metadata only (ids, text length), never message text
+- Covered by `packages/core/test/logger.test.ts`
+
 ### Recommended Additions
 
 ⚠️ **Rate Limiting**
@@ -391,8 +431,7 @@ await limiter.checkLimit(userId, '10/minute');
 
 ⚠️ **Data Encryption**
 
-- Encrypt sensitive profile data (if adding HR zones, health data)
-- Use PostgreSQL pgcrypto or application-level encryption
+- Extend `encryptSecret` to other sensitive profile data (if adding HR zones, health data)
 
 ## Monitoring & Observability
 

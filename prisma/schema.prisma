@@ -14,6 +14,7 @@ model User {
   workouts   Workout[]
   fatigue    Fatigue[]
   processedMessages ProcessedMessage[]
+  icuConnection     IcuConnection?
 
   @@index([telegramId])
 }
@@ -86,4 +87,19 @@ model ProcessedMessage {
 
   @@unique([userId, telegramMessageId])
   @@index([userId])
+}
+
+// intervals.icu account link — one per user. API key is AES-256-GCM encrypted (see core/crypto.ts)
+model IcuConnection {
+  id                 String    @id @default(cuid())
+  userId             String    @unique
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  icuAthleteId       String
+  icuAthleteName     String?
+  apiKeyCiphertext   String    // base64(ciphertext || authTag)
+  apiKeyIv           String    // base64 12-byte IV
+  lastActivitySyncAt DateTime?
+  lastWellnessSyncAt DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 }

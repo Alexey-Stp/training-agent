@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { logger } from './logger';
+import type { IcuConnectionRepo } from './icu-connect';
 
 export const prisma = new PrismaClient({
   log: [
@@ -68,3 +69,23 @@ export async function markMessageProcessed(userId: string, messageId: number): P
     },
   });
 }
+
+export const icuConnectionRepo: IcuConnectionRepo = {
+  async upsert(data) {
+    const { userId, ...fields } = data;
+    await prisma.icuConnection.upsert({
+      where: { userId },
+      create: data,
+      update: fields,
+    });
+  },
+
+  findByUserId(userId) {
+    return prisma.icuConnection.findUnique({ where: { userId } });
+  },
+
+  async deleteByUserId(userId) {
+    const { count } = await prisma.icuConnection.deleteMany({ where: { userId } });
+    return count > 0;
+  },
+};

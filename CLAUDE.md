@@ -19,7 +19,7 @@ npm run build                # builds @triathlon/core first, then all workspaces
 npm run typecheck
 npm run lint                 # ESLint on all .ts (tests and test/ dirs are ignored by lint)
 npm run format:check
-npm test                     # vitest run in every workspace that has tests (core, integrations-icu)
+npm test                     # vitest run in every workspace that has tests (core, integrations-icu, bot, worker)
 npm run ci                   # lint + typecheck + test + build
 
 # Single package / single test
@@ -40,7 +40,7 @@ The Prisma config is in `prisma.config.ts` (Prisma 7) and loads `DATABASE_URL` f
 
 ## Architecture
 
-- **apps/bot**: A thin gateway. `parser.ts` parses text into `{commandName, args}`. `index.ts` enqueues a `CommandJob` (3 attempts, exponential backoff) and reacts 👀. It has no business logic and no DB access.
+- **apps/bot**: A thin gateway. `parser.ts` parses text into `{commandName, args}`. `index.ts` enqueues a `CommandJob` via `queue.ts` `enqueueCommand` (3 attempts, exponential backoff) and reacts 👀. It has no DB access. The only logic it holds is the `/connect icu` dialog (`connect-dialog.ts`, state in Redis). That dialog encrypts the ICU API key before enqueueing a `connect_icu` job, so the plaintext never lands in the queue. Never log message text in the bot.
 - **apps/worker**: Consumes the `commands` queue (concurrency 5, rate limit 10/s). It dispatches on `commandName` in `index.ts` and validates arguments inline there. Note that `validateSetFtpArgs`/`validateLogArgs` in `bot/parser.ts` are currently unused. `handlers.ts` holds the command handlers, which return reply strings. The worker sends replies itself through a grammY `Bot.api` instance.
   - **Idempotency**: `db.ts` calls `ensureUser()`, which auto-creates the user and a default profile. `checkMessageProcessed`/`markMessageProcessed` use the `ProcessedMessage` table, so retried jobs don't double-reply. Keep this pattern when you add commands.
   - When a job fails, the worker sends a generic error message and rethrows so that BullMQ retries.
@@ -48,8 +48,9 @@ The Prisma config is in `prisma.config.ts` (Prisma 7) and loads `DATABASE_URL` f
   1. `generateDraftPlan(profile, startDate)` → `addOptionalSundaySwim` → `applyRules(plan, context)`.
   2. `applyRules` runs its rules in a fixed order: SwimRotation → ReadinessDownshift → NoHardHard → WeeklyLoadCap. Each rule is a pure `WeekPlan → WeekPlan` function that appends to `warnings`/`appliedRules`. A hard session is Z4/Z5 or is tagged `vo2`/`threshold` (`isHardSession`). Downgrades go through `downgradeToEasy`.
   - Apps consume core from `dist/` (`main: ./dist/index.js`, TS project references). **Rebuild core after you change it** or the apps will see stale types.
-- **packages/integrations-icu** (`@triathlon/integrations-icu`): A typed intervals.icu REST client (`IcuClient`). It uses Basic auth `API_KEY:<key>`, retries with backoff on 429/5xx, throws `IcuAuthError` on 401 without retrying, and throws `IcuContractError` when zod validation fails. Tests inject `fetch` plus `baseDelayMs: 0` and use JSON fixtures in `test/fixtures/`. The apps don't use this package yet.
-- **prisma/schema.prisma**: `User`, `Profile` (FTP, timezone, swim/bike/run day preferences), `Workout`, `Fatigue` (readiness input for the rules engine), and `ProcessedMessage`. Prisma's `Sport`/`Intensity` enums mirror the ones in core.
+- **packages/integrations-icu** (`@triathlon/integrations-icu`): A typed intervals.icu REST client (`IcuClient`). It uses Basic auth `API_KEY:<key>`, retries with backoff on 429/5xx, throws `IcuAuthError` on 401 without retrying, and throws `IcuContractError` when zod validation fails. Tests inject `fetch` plus `baseDelayMs: 0` and use JSON fixtures in `test/fixtures/`. The worker uses it in `icu-connect.ts`: those handlers take injected deps (repo, keys, `createClient`) so tests don't need Prisma or the network.
+- **prisma/schema.prisma**: `User`, `Profile` (FTP, timezone, swim/bike/run day preferences), `Workout`, `Fatigue` (readiness input for the rules engine), `ProcessedMessage`, and `IcuConnection` (one per user, API key AES-256-GCM encrypted). Prisma's `Sport`/`Intensity` enums mirror the ones in core. Migrations live in `prisma/migrations` (`0_init` is the baseline). Generate new ones with `npm run db:migrate`; dev and CI still use `db:push`.
+- **Secrets and logging**: `@triathlon/core` provides `encryptSecret`/`decryptSecret` (the keyring comes from `getEncKeys()`: `SECRETS_ENC_KEY`, plus optional `SECRETS_ENC_KEY_PREVIOUS` for rotation) and `createLogger()` with pino redaction (`LOG_REDACT_PATHS`). Add new sensitive field names to that list.
 
 ## Conventions
 

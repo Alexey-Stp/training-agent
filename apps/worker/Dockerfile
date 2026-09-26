@@ -11,6 +11,7 @@ COPY prisma ./prisma
 
 # Copy package files
 COPY packages/core/package*.json ./packages/core/
+COPY packages/integrations-icu/package*.json ./packages/integrations-icu/
 COPY apps/worker/package*.json ./apps/worker/
 
 # Install dependencies
@@ -28,6 +29,7 @@ COPY package*.json ./
 COPY tsconfig.base.json ./
 COPY prisma ./prisma
 COPY packages/core ./packages/core
+COPY packages/integrations-icu ./packages/integrations-icu
 COPY apps/worker ./apps/worker
 
 # Generate Prisma client
@@ -35,6 +37,9 @@ RUN npx prisma generate
 
 # Build packages
 WORKDIR /app/packages/core
+RUN npm run build
+
+WORKDIR /app/packages/integrations-icu
 RUN npm run build
 
 # Build worker
@@ -51,6 +56,8 @@ ENV NODE_ENV=production
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/packages/core/dist ./packages/core/dist
 COPY --from=builder /app/packages/core/package.json ./packages/core/
+COPY --from=builder /app/packages/integrations-icu/dist ./packages/integrations-icu/dist
+COPY --from=builder /app/packages/integrations-icu/package.json ./packages/integrations-icu/
 COPY --from=builder /app/apps/worker/dist ./apps/worker/dist
 COPY --from=builder /app/apps/worker/package.json ./apps/worker/
 COPY --from=builder /app/prisma ./prisma

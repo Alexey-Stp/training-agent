@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `@triathlon/integrations-icu`: `listEvents(oldest?, newest?)` optional date range
+- `/connect icu` dialog, `/connect status`, `/disconnect icu`: link an intervals.icu account, validated with `getAthlete` (TA-9)
+- `IcuConnection` Prisma model; `prisma/migrations` with `0_init` baseline and `1_icu_connection`; `npm run db:deploy`
+- `@triathlon/core`: AES-256-GCM `encryptSecret`/`decryptSecret` with rotation-ready keyring, `SECRETS_ENC_KEY` / `SECRETS_ENC_KEY_PREVIOUS` env vars
+- `@triathlon/core`: shared `createLogger()` with pino redaction of credentials and raw message text
+
+### Changed
+
+- Bot no longer logs full Telegram updates (metadata only)
 
 ## [1.0.0] - 2026-02-11
 
