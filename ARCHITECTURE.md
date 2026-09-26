@@ -63,17 +63,20 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 **Responsibility**: Lightweight gateway that receives Telegram updates and enqueues jobs.
 
 **Key Files**:
+
 - `index.ts` - Main bot initialization with grammY
 - `parser.ts` - Command parsing and validation
 - `queue.ts` - BullMQ queue setup
 
 **Design Principles**:
+
 - Thin layer - no business logic
 - Fast acknowledgment to user (reaction emoji)
 - Resilient error handling (never crash on bad input)
 - All requests go through queue for consistency
 
 **Why separate bot from worker?**
+
 - Bot service can restart without losing in-flight jobs
 - Worker can scale independently (multiple instances)
 - Clear separation of concerns
@@ -83,11 +86,13 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 **Responsibility**: Process jobs from queue, execute business logic, send responses.
 
 **Key Files**:
+
 - `index.ts` - BullMQ worker setup and job processing
 - `handlers.ts` - Command handler implementations
 - `db.ts` - Database utilities (user creation, deduplication)
 
 **Design Principles**:
+
 - All business logic lives here
 - Idempotent (dedupe via ProcessedMessage table)
 - Retries on failure (BullMQ built-in)
@@ -100,12 +105,14 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 **Responsibility**: Shared business logic, types, rules engine.
 
 **Key Files**:
+
 - `types.ts` - Domain models (Session, WeekPlan, UserProfile, etc.)
 - `config.ts` - Environment variable validation (Zod)
 - `plan-generator.ts` - Draft plan generation from template
 - `rules-engine.ts` - Plan validation and adjustments
 
 **Design Principles**:
+
 - Pure functions where possible
 - No side effects (DB, network)
 - Fully tested (see `test/rules-engine.test.ts`)
@@ -116,27 +123,30 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 **Responsibility**: Typed, rate-limited HTTP client for the [intervals.icu](https://intervals.icu) REST API.
 
 **Key Files**:
+
 - `src/client.ts` - `IcuClient` class exposing all methods; injectable fetch for testability
 - `src/schemas.ts` - Zod v4 schemas for Athlete, Activity, Wellness, Event (`.passthrough()` to tolerate unknown fields)
-- `src/errors.ts` - Typed errors: `IcuRateLimitError`, `IcuAuthError`, `IcuContractError`
+- `src/errors.ts` - Typed errors: `IcuRateLimitError`, `IcuServerError`, `IcuAuthError`, `IcuHttpError`, `IcuContractError`
 - `test/fixtures/` - JSON fixtures for unit tests
 
 **Public API**:
-| Method | HTTP | Description |
-|---|---|---|
-| `getAthlete()` | GET `/athlete/:id` | Fetch the authenticated athlete's profile |
-| `listActivities(oldest, newest)` | GET `/athlete/:id/activities` | Activities in date range |
-| `listWellness(oldest, newest)` | GET `/athlete/:id/wellness` | Wellness/HRV data in date range |
-| `listEvents()` | GET `/athlete/:id/events` | Calendar events |
-| `createEvent(data)` | POST `/athlete/:id/events` | Create a new calendar event |
-| `updateEvent(id, data)` | PUT `/athlete/:id/events/:id` | Update an existing event |
-| `deleteEvent(id)` | DELETE `/athlete/:id/events/:id` | Delete a calendar event |
+
+| Method                           | HTTP                             | Description                               |
+| -------------------------------- | -------------------------------- | ----------------------------------------- |
+| `getAthlete()`                   | GET `/athlete/:id`               | Fetch the authenticated athlete's profile |
+| `listActivities(oldest, newest)` | GET `/athlete/:id/activities`    | Activities in date range                  |
+| `listWellness(oldest, newest)`   | GET `/athlete/:id/wellness`      | Wellness/HRV data in date range           |
+| `listEvents(oldest?, newest?)`   | GET `/athlete/:id/events`        | Calendar events (optional date range)     |
+| `createEvent(data)`              | POST `/athlete/:id/events`       | Create a new calendar event               |
+| `updateEvent(id, data)`          | PUT `/athlete/:id/events/:id`    | Update an existing event                  |
+| `deleteEvent(id)`                | DELETE `/athlete/:id/events/:id` | Delete a calendar event                   |
 
 **Auth**: HTTP Basic with username `API_KEY` and password = athlete API key. Configured via `ICU_ATHLETE_ID` / `ICU_API_KEY` env vars.
 
-**Retry strategy**: Exponential backoff (max 3 retries) on 429 and 5xx responses. 401 throws `IcuAuthError` immediately (no retry). After exhausting retries on 429, throws `IcuRateLimitError`. Malformed responses throw `IcuContractError` with the endpoint name.
+**Retry strategy**: Exponential backoff (max 3 retries) on 429 and 5xx responses. 401 throws `IcuAuthError` immediately (no retry). After exhausting retries, throws `IcuRateLimitError` (429) or `IcuServerError` (5xx). Any other non-OK status throws `IcuHttpError` (status, endpoint, body) without retry. Malformed responses throw `IcuContractError` with the endpoint name.
 
 **Design Principles**:
+
 - All ICU access goes through one typed client (single place for auth, retry, error mapping)
 - No DB persistence — pure network layer
 - Fully tested (see `test/client.test.ts`)
@@ -219,6 +229,7 @@ Draft Plan (template) → Rules Engine → Final Plan
 4. **WeeklyLoadCap** (hard) - Limit volume growth
 
 **Why this order?**
+
 - SwimRotation first to ensure proper structure
 - ReadinessDownshift next to handle fatigue ASAP
 - NoHardHard after (some sessions may already be downgraded)
@@ -234,6 +245,7 @@ To add a new rule:
 4. Document in README
 
 Example:
+
 ```typescript
 function applyMyCustomRule(plan: WeekPlan, context: RulesContext): WeekPlan {
   const sessions = [...plan.sessions];
@@ -252,6 +264,7 @@ function applyMyCustomRule(plan: WeekPlan, context: RulesContext): WeekPlan {
 ### Current Capacity
 
 With default settings:
+
 - 5 concurrent workers
 - ~2-3s per job (DB queries + plan generation)
 - **~100-150 requests/minute**
@@ -262,6 +275,7 @@ With default settings:
 To scale beyond 1000 users:
 
 1. **Add more worker containers**:
+
    ```yaml
    # docker-compose.yml
    worker:
@@ -270,6 +284,7 @@ To scale beyond 1000 users:
    ```
 
 2. **Increase concurrency**:
+
    ```typescript
    // apps/worker/src/index.ts
    const worker = new Worker('commands', processJob, {
@@ -290,6 +305,7 @@ To scale beyond 1000 users:
 ### Performance Optimizations
 
 **Quick wins**:
+
 - Cache profile in Redis after first fetch
 - Batch workout queries (fetch by date range)
 - Use PostgreSQL connection pooling
@@ -337,26 +353,31 @@ const validatedPlan = applyRules(llmPlan, context);
 ### Current Protections
 
 ✅ **Input Validation**
+
 - All commands validated before processing
 - Zod schema for env vars
 - Prisma ORM prevents SQL injection
 
 ✅ **Idempotency**
+
 - ProcessedMessage table prevents duplicate logs
 - Important for `/log` command
 
 ✅ **Error Handling**
+
 - Never crash on bad input
 - Graceful error messages to users
 - Full error logging with Pino
 
 ✅ **No Secrets in Code**
+
 - All config via env vars
 - .env.example for documentation only
 
 ### Recommended Additions
 
 ⚠️ **Rate Limiting**
+
 ```typescript
 // Add to worker
 const limiter = new RateLimiter(redis);
@@ -364,10 +385,12 @@ await limiter.checkLimit(userId, '10/minute');
 ```
 
 ⚠️ **User Authentication**
+
 - Current: Trust Telegram user ID
 - Better: Verify user via Telegram authentication
 
 ⚠️ **Data Encryption**
+
 - Encrypt sensitive profile data (if adding HR zones, health data)
 - Use PostgreSQL pgcrypto or application-level encryption
 
@@ -378,6 +401,7 @@ await limiter.checkLimit(userId, '10/minute');
 **Current**: Pino JSON logs to stdout
 
 **Production**: Ship to aggregation service
+
 ```bash
 # Example: Send to Datadog
 docker compose logs -f worker | datadog-agent
@@ -405,11 +429,13 @@ docker compose logs -f worker | datadog-agent
 ### Alerts
 
 **Critical**:
+
 - Queue depth > 100 (workers overwhelmed)
 - Failed job rate > 5% (something broken)
 - Database connection failures
 
 **Warning**:
+
 - Average job time > 10s (slow queries?)
 - Redis memory > 80% (needs scaling)
 
@@ -418,6 +444,7 @@ docker compose logs -f worker | datadog-agent
 ### Current Tests
 
 ✅ **Unit Tests** (`packages/core/test/`)
+
 - Rules engine (5+ test cases)
 - Edge cases and interactions
 - Run with `npm test`
@@ -425,6 +452,7 @@ docker compose logs -f worker | datadog-agent
 ### Recommended Additions
 
 📋 **Integration Tests**
+
 ```typescript
 // Test full command flow
 it('should process /plan command end-to-end', async () => {
@@ -435,12 +463,14 @@ it('should process /plan command end-to-end', async () => {
 ```
 
 📋 **Load Tests**
+
 ```bash
 # Simulate 100 concurrent users
 k6 run load-test.js
 ```
 
 📋 **E2E Tests**
+
 ```typescript
 // Test against real Telegram (staging bot)
 await bot.sendMessage('/plan');
@@ -475,21 +505,21 @@ kind: Deployment
 metadata:
   name: triathlon-bot
 spec:
-  replicas: 1  # Single bot instance
+  replicas: 1 # Single bot instance
   selector:
     matchLabels:
       app: bot
   template:
     spec:
       containers:
-      - name: bot
-        image: triathlon-bot:latest
-        env:
-        - name: TELEGRAM_BOT_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: telegram-secret
-              key: token
+        - name: bot
+          image: triathlon-bot:latest
+          env:
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: telegram-secret
+                  key: token
 ```
 
 ```yaml
@@ -499,15 +529,15 @@ kind: Deployment
 metadata:
   name: triathlon-worker
 spec:
-  replicas: 3  # Scale horizontally
+  replicas: 3 # Scale horizontally
   selector:
     matchLabels:
       app: worker
   template:
     spec:
       containers:
-      - name: worker
-        image: triathlon-worker:latest
+        - name: worker
+          image: triathlon-worker:latest
 ```
 
 ## Future Architecture Improvements
@@ -540,6 +570,7 @@ spec:
 ## Conclusion
 
 This architecture balances:
+
 - **Simplicity** (easy to understand and maintain)
 - **Scalability** (queue-based, horizontal scaling)
 - **Reliability** (idempotency, retries, error handling)

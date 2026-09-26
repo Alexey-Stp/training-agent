@@ -5,17 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `@triathlon/integrations-icu`: exhausted 5xx retries now throw `IcuServerError` (previously `IcuRateLimitError`); other non-OK statuses throw typed `IcuHttpError` with endpoint name
+
+### Added
+
+- `@triathlon/integrations-icu`: `listEvents(oldest?, newest?)` optional date range
+
 ## [1.0.0] - 2026-02-11
 
 ### Added - MVP Release
 
 #### Core Features
+
 - Telegram bot with grammY framework
 - Queue-based architecture (BullMQ + Redis)
 - PostgreSQL database with Prisma ORM
 - Clean monorepo structure (apps + packages)
 
 #### Commands
+
 - `/start` - Welcome message and help
 - `/profile` - View training profile
 - `/set ftp <number>` - Update FTP value
@@ -23,12 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `/log <sport> <minutes> [intensity]` - Log workout
 
 #### Rules Engine
+
 - **NoHardHard** - Prevent consecutive hard training days
 - **ReadinessDownshift** - Auto-adjust plan based on fatigue
 - **WeeklyLoadCap** - Limit volume to 110% of previous week
 - **SwimRotation** - Enforce swim session structure
 
 #### Architecture
+
 - Bot service (thin gateway, enqueues jobs)
 - Worker service (processes jobs, business logic)
 - Core package (types, rules engine, plan generator)
@@ -36,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Full TypeScript with strict mode
 
 #### Developer Experience
+
 - Comprehensive unit tests (Vitest)
 - Hot reload in development (tsx watch)
 - Pino structured logging
@@ -43,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Idempotency via ProcessedMessage table
 
 #### Documentation
+
 - [README.md](README.md) - Full documentation
 - [QUICKSTART.md](QUICKSTART.md) - 5-minute setup
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Deep dive
@@ -51,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Technical Details
 
 #### Database Schema
+
 - User (Telegram ID mapping)
 - Profile (FTP, timezone, preferences)
 - Workout (logged training sessions)
@@ -58,6 +75,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ProcessedMessage (idempotency)
 
 #### Default Profile
+
 - FTP: 355W
 - Timezone: Europe/Prague
 - Swim: Wed (technique), Fri (intervals), Sun (optional)
@@ -65,6 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Long Bike: Sunday
 
 #### Weekly Plan Template
+
 - Mon: Bike Z2 60min
 - Tue: Run intervals Z4 55min
 - Wed: Swim technique Z2 50min
@@ -74,6 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sun: Long bike Z2 180min + optional swim
 
 #### Scaling Capacity
+
 - 5 concurrent workers
 - ~100-150 requests/minute
 - Supports 1000+ daily active users
@@ -81,11 +101,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Infrastructure
 
 #### Services
+
 - PostgreSQL 16 (Alpine)
 - Redis 7 (Alpine)
 - Node.js 20 (Alpine)
 
 #### Production Ready
+
 - Multi-stage Docker builds
 - Health checks
 - Graceful shutdown
@@ -95,6 +117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Future Roadmap
 
 #### Phase 2 (Post-MVP)
+
 - [ ] LLM integration (GPT-4 for coaching advice)
 - [ ] RAG system (training knowledge base)
 - [ ] HR zone calculator
@@ -102,6 +125,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [ ] Periodization (base/build/peak/taper)
 
 #### Phase 3
+
 - [ ] Garmin/Strava integration
 - [ ] Web dashboard
 - [ ] Training partner matching
@@ -109,6 +133,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [ ] Coach collaboration features
 
 #### Phase 4
+
 - [ ] Mobile app (React Native)
 - [ ] Real-time workout tracking
 - [ ] Video form analysis
@@ -118,6 +143,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Version History
 
 ### [1.0.0] - 2026-02-11
+
 - Initial MVP release
 - Core functionality complete
 - Production-ready architecture
@@ -133,6 +159,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 This is the first production-ready release of the Triathlon Coach Telegram Bot.
 
 **Highlights:**
+
 - ✅ Queue-based architecture scales to 1000+ users
 - ✅ Intelligent rules engine for safe training progression
 - ✅ Clean code with strict TypeScript
@@ -141,11 +168,13 @@ This is the first production-ready release of the Triathlon Coach Telegram Bot.
 - ✅ LLM-ready architecture (no rewrites needed)
 
 **Getting Started:**
+
 1. See [QUICKSTART.md](QUICKSTART.md) for 5-minute setup
 2. Read [README.md](README.md) for full documentation
 3. Explore [ARCHITECTURE.md](ARCHITECTURE.md) for design details
 
 **Known Limitations:**
+
 - Single timezone per user (default: Europe/Prague)
 - No UI for profile editing (command-based only)
 - No workout history visualization
@@ -155,12 +184,14 @@ This is the first production-ready release of the Triathlon Coach Telegram Bot.
 These will be addressed in future releases.
 
 **Performance:**
+
 - Average response time: 2-3 seconds
 - Supports 1000+ daily active users
 - 99.9% uptime target
 - Automatic retries on failure
 
 **Support:**
+
 - GitHub Issues for bug reports
 - Discussions for feature requests
 - Discord community (coming soon)
