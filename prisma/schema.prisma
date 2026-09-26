@@ -15,6 +15,7 @@ model User {
   fatigue    Fatigue[]
   processedMessages ProcessedMessage[]
   icuConnection     IcuConnection?
+  activities        Activity[]
 
   @@index([telegramId])
 }
@@ -40,6 +41,7 @@ enum Sport {
   run
   strength
   rest
+  other
 }
 
 enum Intensity {
@@ -102,4 +104,27 @@ model IcuConnection {
   lastWellnessSyncAt DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
+}
+
+// Executed activity pulled from intervals.icu (see apps/worker/src/activity-sync.ts)
+model Activity {
+  id             String   @id @default(cuid())
+  icuId          String   @unique
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sport          Sport
+  icuType        String   // raw ICU type, e.g. "VirtualRide"
+  name           String
+  startTime      DateTime // UTC
+  startDateLocal String   // YYYY-MM-DD in the athlete's local time
+  durationSec    Int      // moving time, falls back to elapsed time
+  distanceM      Float?
+  load           Int?     // icu_training_load (TSS-equivalent)
+  avgHr          Int?
+  avgPower       Int?
+  source         String?  // GARMIN_CONNECT, STRAVA, UPLOAD, ...
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([userId, startTime])
 }

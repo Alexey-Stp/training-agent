@@ -38,6 +38,7 @@ Available commands:
 /connect icu - Link your intervals.icu account
 /connect status - Show your intervals.icu link
 /disconnect icu - Remove your intervals.icu link
+/sync - Pull your latest intervals.icu activities now
 ${profileInfo}`;
 }
 
@@ -263,6 +264,8 @@ function getSportIcon(sport: Sport): string {
       return '💪';
     case Sport.rest:
       return '😴';
+    case Sport.other:
+      return '🏅';
     default:
       return '🏋️';
   }

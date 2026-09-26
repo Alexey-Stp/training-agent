@@ -19,6 +19,16 @@ export const ActivitySchema = z
     start_date_local: z.string(),
     type: z.string(),
     name: z.string(),
+    // Optional metrics. nullish so a sparse activity doesn't fail the contract
+    start_date: z.string().nullish(), // UTC ISO timestamp
+    moving_time: z.number().nullish(), // seconds
+    elapsed_time: z.number().nullish(), // seconds
+    distance: z.number().nullish(), // meters
+    icu_training_load: z.number().nullish(),
+    average_heartrate: z.number().nullish(),
+    icu_average_watts: z.number().nullish(),
+    average_watts: z.number().nullish(),
+    source: z.string().nullish(), // e.g. GARMIN_CONNECT, STRAVA, UPLOAD
   })
   .passthrough();
 

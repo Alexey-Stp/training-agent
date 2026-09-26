@@ -7,7 +7,10 @@
     "moving_time": 3600,
     "distance": 40000,
     "total_elevation_gain": 500,
-    "average_watts": 220
+    "average_watts": 220,
+    "icu_training_load": 62,
+    "average_heartrate": 141.5,
+    "source": "GARMIN_CONNECT"
   },
   {
     "id": "abc002",

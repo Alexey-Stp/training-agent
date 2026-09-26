@@ -58,8 +58,12 @@ describe('IcuClient.listActivities', () => {
     expect(result).toHaveLength(activitiesFixture.length);
     expect(result[0].id).toBe(activitiesFixture[0].id);
     expect(result[0].type).toBe(activitiesFixture[0].type);
+    // Typed optional metrics
+    expect(result[0].moving_time).toBe(3600);
+    expect(result[0].icu_training_load).toBe(62);
+    expect(result[1].average_watts).toBeUndefined();
     // Unknown fields tolerated
-    expect((result[0] as Record<string, unknown>).average_watts).toBe(220);
+    expect((result[0] as Record<string, unknown>).total_elevation_gain).toBe(500);
     const [url] = mockFetch.mock.calls[0] as [string];
     expect(url).toContain('oldest=2024-01-01');
     expect(url).toContain('newest=2024-01-31');

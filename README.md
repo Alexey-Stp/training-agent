@@ -119,6 +119,7 @@ See [CI_CD.md](CI_CD.md) for complete CI/CD documentation.
 - `/connect icu` - Link your intervals.icu account (asks for athlete ID, then API key)
 - `/connect status` - Show the linked athlete, masked API key and last sync times
 - `/disconnect icu` - Remove the link and the stored API key
+- `/sync` - Pull your latest intervals.icu activities now
 
 ### Default Profile
 
@@ -147,13 +148,23 @@ The plan generator applies these rules automatically:
 
 ## intervals.icu Integration
 
-`packages/integrations-icu` (`@triathlon/integrations-icu`) is a typed REST client for [intervals.icu](https://intervals.icu). The worker uses it to validate credentials in `/connect icu`. Sync jobs come in E1-T3/T4.
+`packages/integrations-icu` (`@triathlon/integrations-icu`) is a typed REST client for [intervals.icu](https://intervals.icu). The worker uses it to validate credentials in `/connect icu` and to sync activities. Wellness sync comes in E1-T4.
 
 ### Linking an account
 
 1. `/connect icu`. The bot asks for your athlete ID (intervals.icu → Settings → Developer Settings, e.g. `i12345`).
 2. Send the athlete ID, then your API key. The bot deletes the key message immediately and encrypts the key before it is queued.
 3. The worker calls `getAthlete`. On success the connection is stored in `IcuConnection` with the key encrypted (AES-256-GCM). On failure you get an error message and nothing is stored.
+
+### Activity sync
+
+Once an athlete is linked, the worker pulls their activities from intervals.icu into the `Activity` table:
+
+- The first run (right after `/connect icu`) backfills the last 90 days (`ICU_ACTIVITY_BACKFILL_DAYS`).
+- After that it runs every 30 minutes (`ICU_ACTIVITY_SYNC_EVERY_MIN`). It re-reads from the last sync minus 2 days (`ICU_ACTIVITY_SYNC_OVERLAP_DAYS`) to catch late uploads.
+- `/sync` runs it immediately and replies with the number of new and updated activities.
+- Activities are keyed by their ICU id. A run with no new data writes nothing. If intervals.icu is down, the job is retried and the sync cursor stays where it was.
+- ICU types map to the local sport: Ride/VirtualRide/... → `bike`, Run/TrailRun/... → `run`, Swim/OpenWaterSwim → `swim`, WeightTraining → `strength`, anything else → `other`.
 
 Set `SECRETS_ENC_KEY` in `.env` (base64 of 32 bytes: `openssl rand -base64 32`). Both bot and worker need it. To rotate, move the old key to `SECRETS_ENC_KEY_PREVIOUS` and set a new `SECRETS_ENC_KEY`.
 

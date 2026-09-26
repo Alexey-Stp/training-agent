@@ -1,8 +1,8 @@
 import 'dotenv/config';
-import { Worker, Job } from 'bullmq';
+import { Worker, Job, Queue } from 'bullmq';
 import { Bot } from 'grammy';
 import { getConfig, getEncKeys } from '@triathlon/core';
-import type { CommandJob } from '@triathlon/core';
+import type { CommandJob, IcuSyncJob } from '@triathlon/core';
 import { IcuClient } from '@triathlon/integrations-icu';
 import { logger } from './logger';
 import {
@@ -11,6 +11,7 @@ import {
   checkMessageProcessed,
   markMessageProcessed,
   icuConnectionRepo,
+  activityRepo,
 } from './db';
 import {
   handleStart,
@@ -26,6 +27,12 @@ import {
   handleDisconnectIcu,
   type IcuConnectDeps,
 } from './icu-connect';
+import { handleSync, processSyncJob, type ActivitySyncDeps } from './activity-sync';
+import {
+  ACTIVITY_SYNC_QUEUE,
+  createActivitySyncScheduler,
+  reconcileSchedulers,
+} from './sync-scheduler';
 
 const config = getConfig();
 
@@ -33,10 +40,34 @@ const config = getConfig();
 const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
 const api = bot.api;
 
+const redisConnection = {
+  host: config.REDIS_HOST,
+  port: config.REDIS_PORT,
+};
+const encKeys = getEncKeys(config);
+
+// intervals.icu activity sync: one repeatable job per linked athlete on the icu-sync queue
+const syncEveryMs = config.ICU_ACTIVITY_SYNC_EVERY_MIN * 60_000;
+const syncQueue = new Queue<IcuSyncJob>(ACTIVITY_SYNC_QUEUE, { connection: redisConnection });
+const activitySyncScheduler = createActivitySyncScheduler(syncQueue, syncEveryMs);
+
+const activitySyncDeps: ActivitySyncDeps = {
+  repo: activityRepo,
+  keys: encKeys,
+  createClient: (athleteId, apiKey) => new IcuClient({ athleteId, apiKey }),
+  now: () => new Date(),
+  backfillDays: config.ICU_ACTIVITY_BACKFILL_DAYS,
+  overlapDays: config.ICU_ACTIVITY_SYNC_OVERLAP_DAYS,
+};
+
 const icuConnectDeps: IcuConnectDeps = {
   repo: icuConnectionRepo,
-  keys: getEncKeys(config),
+  keys: encKeys,
   createClient: (athleteId, apiKey) => new IcuClient({ athleteId, apiKey }),
+  scheduler: activitySyncScheduler,
+  onSchedulerError: (error, userId) => {
+    logger.error({ error, userId }, 'Failed to update activity sync schedule');
+  },
 };
 
 // Create worker
@@ -145,6 +176,10 @@ const worker = new Worker<CommandJob>(
               : '❌ Usage: /disconnect icu';
           break;
 
+        case 'sync':
+          response = await handleSync(user.id, activitySyncDeps);
+          break;
+
         case 'unknown':
         default:
           response = handleUnknown();
@@ -190,10 +225,7 @@ const worker = new Worker<CommandJob>(
     }
   },
   {
-    connection: {
-      host: config.REDIS_HOST,
-      port: config.REDIS_PORT,
-    },
+    connection: redisConnection,
     concurrency: 5,
     limiter: {
       max: 10,
@@ -214,12 +246,44 @@ worker.on('error', (err) => {
   logger.error({ error: err }, 'Worker error');
 });
 
+const syncWorker = new Worker<IcuSyncJob>(
+  ACTIVITY_SYNC_QUEUE,
+  async (job: Job<IcuSyncJob>) => {
+    const result = await processSyncJob(job.data, activitySyncDeps);
+    logger.info({ jobId: job.id, userId: job.data.userId, ...result }, 'Activity sync finished');
+    return result;
+  },
+  { connection: redisConnection, concurrency: 2 }
+);
+
+syncWorker.on('failed', (job, err) => {
+  logger.error(
+    { jobId: job?.id, userId: job?.data.userId, attempt: job?.attemptsMade, error: err },
+    'Activity sync failed'
+  );
+});
+
+syncWorker.on('error', (err) => {
+  logger.error({ error: err }, 'Sync worker error');
+});
+
+async function startActivitySync() {
+  const userIds = await activityRepo.listConnectedUserIds();
+  const result = await reconcileSchedulers(syncQueue, activitySyncScheduler, userIds, syncEveryMs);
+  logger.info(result, 'Activity sync schedules reconciled');
+}
+
+startActivitySync().catch((error: unknown) => {
+  logger.error({ error }, 'Failed to reconcile activity sync schedules');
+});
+
 logger.info('Worker started and listening for jobs...');
 
 // Graceful shutdown
 async function shutdown() {
   logger.info('Shutting down worker...');
-  await worker.close();
+  await Promise.all([worker.close(), syncWorker.close()]);
+  await syncQueue.close();
   await prisma.$disconnect();
   process.exit(0);
 }
