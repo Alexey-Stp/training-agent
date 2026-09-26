@@ -4,6 +4,7 @@ export enum Sport {
   run = 'run',
   strength = 'strength',
   rest = 'rest',
+  other = 'other',
 }
 
 export enum Intensity {
@@ -67,6 +68,11 @@ export interface CommandJob {
   rawText: string;
   /** Set only for `connect_icu` jobs. The API key is encrypted by the bot before enqueueing. */
   icuCredentials?: IcuCredentialsPayload;
+}
+
+/** Payload of `icu-sync` queue jobs (scheduled per linked athlete, see worker sync-scheduler.ts) */
+export interface IcuSyncJob {
+  userId: string;
 }
 
 export interface IcuCredentialsPayload {

@@ -1,0 +1,72 @@
+[
+  {
+    "id": "i1001",
+    "start_date_local": "2026-07-01T07:30:00",
+    "start_date": "2026-07-01T05:30:00Z",
+    "type": "Ride",
+    "name": "Endurance Ride",
+    "moving_time": 7200,
+    "elapsed_time": 7500,
+    "distance": 62000.5,
+    "icu_training_load": 95,
+    "average_heartrate": 138.6,
+    "icu_average_watts": 221.4,
+    "average_watts": 215,
+    "source": "GARMIN_CONNECT"
+  },
+  {
+    "id": "i1002",
+    "start_date_local": "2026-08-12T18:00:00",
+    "start_date": "2026-08-12T16:00:00Z",
+    "type": "VirtualRide",
+    "name": "Zwift VO2",
+    "moving_time": 3600,
+    "distance": 32000,
+    "icu_training_load": 82,
+    "average_heartrate": 152,
+    "average_watts": 248,
+    "source": "GARMIN_CONNECT"
+  },
+  {
+    "id": "i1003",
+    "start_date_local": "2026-09-10T06:45:00",
+    "start_date": "2026-09-10T04:45:00Z",
+    "type": "Run",
+    "name": "Easy Run",
+    "moving_time": 2700,
+    "distance": 8100,
+    "icu_training_load": 38,
+    "average_heartrate": 141,
+    "source": "GARMIN_CONNECT"
+  },
+  {
+    "id": "i1004",
+    "start_date_local": "2026-09-16T12:00:00",
+    "start_date": "2026-09-16T10:00:00Z",
+    "type": "Swim",
+    "name": "Pool Swim",
+    "moving_time": 2400,
+    "distance": 2500,
+    "icu_training_load": 30,
+    "source": "GARMIN_CONNECT"
+  },
+  {
+    "id": "i1005",
+    "start_date_local": "2026-09-20T19:00:00",
+    "type": "WeightTraining",
+    "name": "Gym",
+    "elapsed_time": 2700,
+    "source": "GARMIN_CONNECT"
+  },
+  {
+    "id": "i1006",
+    "start_date_local": "2026-09-24T08:00:00",
+    "start_date": "2026-09-24T06:00:00Z",
+    "type": "Yoga",
+    "name": "Mobility",
+    "moving_time": 1800,
+    "distance": null,
+    "icu_training_load": null,
+    "source": "UPLOAD"
+  }
+]

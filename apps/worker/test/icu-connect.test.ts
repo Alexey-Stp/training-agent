@@ -24,8 +24,8 @@ import {
 
 class MemoryRepo implements IcuConnectionRepo {
   readonly rows = new Map<string, IcuConnectionRecord>();
-  upsert(data: Parameters<IcuConnectionRepo['upsert']>[0]) {
-    const prev = this.rows.get(data.userId);
+  upsert(data: Parameters<IcuConnectionRepo['upsert']>[0], { resetSync }: { resetSync: boolean }) {
+    const prev = resetSync ? undefined : this.rows.get(data.userId);
     this.rows.set(data.userId, {
       lastActivitySyncAt: prev?.lastActivitySyncAt ?? null,
       lastWellnessSyncAt: prev?.lastWellnessSyncAt ?? null,
@@ -132,6 +132,35 @@ describe('handleConnectIcu', () => {
   });
 });
 
+describe('handleConnectIcu: sync cursor on re-link', () => {
+  const SYNCED_AT = new Date('2026-09-20T08:00:00Z');
+
+  it('same athlete (e.g. new key): cursor kept', async () => {
+    await handleConnectIcu(USER_ID, creds(), ok.deps);
+    ok.repo.rows.get(USER_ID)!.lastActivitySyncAt = SYNCED_AT;
+
+    await handleConnectIcu(USER_ID, creds('rotated-icu-api-key-000000'), ok.deps);
+    expect(ok.repo.rows.get(USER_ID)!.lastActivitySyncAt).toEqual(SYNCED_AT);
+  });
+
+  it('different athlete: cursors reset so the new athlete gets a full backfill', async () => {
+    const upsert = vi.spyOn(ok.repo, 'upsert');
+    await handleConnectIcu(USER_ID, creds(), ok.deps);
+    ok.repo.rows.get(USER_ID)!.lastActivitySyncAt = SYNCED_AT;
+    ok.repo.rows.get(USER_ID)!.lastWellnessSyncAt = SYNCED_AT;
+
+    await handleConnectIcu(USER_ID, creds(API_KEY, 'i99999'), ok.deps);
+
+    expect(upsert.mock.calls.map(([, opts]) => opts)).toEqual([
+      { resetSync: false },
+      { resetSync: true },
+    ]);
+    const row = ok.repo.rows.get(USER_ID)!;
+    expect(row.lastActivitySyncAt).toBeNull();
+    expect(row.lastWellnessSyncAt).toBeNull();
+  });
+});
+
 describe('handleConnectStatus', () => {
   it('not connected', async () => {
     expect(await handleConnectStatus(USER_ID, ok.deps)).toBe(MSG_NOT_CONNECTED);
@@ -161,5 +190,42 @@ describe('handleDisconnectIcu', () => {
 
   it('nothing to disconnect', async () => {
     expect(await handleDisconnectIcu(USER_ID, ok.deps)).toBe(MSG_NOT_CONNECTED);
+  });
+});
+
+describe('activity sync scheduling', () => {
+  function withScheduler(schedule = vi.fn(() => Promise.resolve())) {
+    const scheduler = { schedule, unschedule: vi.fn(() => Promise.resolve()) };
+    const onSchedulerError = vi.fn();
+    const deps: IcuConnectDeps = { ...ok.deps, scheduler, onSchedulerError };
+    return { scheduler, onSchedulerError, deps };
+  }
+
+  it('connect schedules the sync, disconnect removes it', async () => {
+    const { scheduler, deps } = withScheduler();
+
+    await handleConnectIcu(USER_ID, creds(), deps);
+    expect(scheduler.schedule).toHaveBeenCalledWith(USER_ID);
+
+    await handleDisconnectIcu(USER_ID, deps);
+    expect(scheduler.unschedule).toHaveBeenCalledWith(USER_ID);
+  });
+
+  it('failed credentials do not schedule anything', async () => {
+    const bad = makeDeps(() => Promise.reject(new IcuAuthError()));
+    const { scheduler, deps } = withScheduler();
+    await handleConnectIcu(USER_ID, creds(), { ...bad.deps, scheduler: deps.scheduler });
+    expect(scheduler.schedule).not.toHaveBeenCalled();
+  });
+
+  it('scheduler failure is reported but does not fail the connect', async () => {
+    const error = new Error('redis down');
+    const { onSchedulerError, deps } = withScheduler(vi.fn(() => Promise.reject(error)));
+
+    const reply = await handleConnectIcu(USER_ID, creds(), deps);
+
+    expect(reply).toContain('Connected');
+    expect(ok.repo.rows.size).toBe(1);
+    expect(onSchedulerError).toHaveBeenCalledWith(error, USER_ID);
   });
 });

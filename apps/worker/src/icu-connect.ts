@@ -8,6 +8,7 @@ import {
   IcuServerError,
 } from '@triathlon/integrations-icu';
 import type { IcuClient } from '@triathlon/integrations-icu';
+import type { ActivitySyncScheduler } from './sync-scheduler';
 
 export interface IcuConnectionRecord {
   userId: string;
@@ -28,8 +29,12 @@ export interface IcuConnectionUpsert {
 }
 
 export interface IcuConnectionRepo {
-  /** One connection per user: re-linking overwrites the previous credentials. */
-  upsert(data: IcuConnectionUpsert): Promise<void>;
+  /**
+   * One connection per user: re-linking overwrites the previous credentials and
+   * removes the user's activities synced from any other athlete. `resetSync`
+   * clears the sync cursors so the new athlete gets a full backfill.
+   */
+  upsert(data: IcuConnectionUpsert, opts: { resetSync: boolean }): Promise<void>;
   findByUserId(userId: string): Promise<IcuConnectionRecord | null>;
   /** Returns true if a connection was deleted. */
   deleteByUserId(userId: string): Promise<boolean>;
@@ -40,6 +45,22 @@ export interface IcuConnectDeps {
   /** Decryption keyring: current key first, then previous (see core getEncKeys). */
   keys: Buffer[];
   createClient(athleteId: string, apiKey: string): Pick<IcuClient, 'getAthlete'>;
+  /** Repeatable activity sync. Failures are reported via onSchedulerError; worker startup reconciles. */
+  scheduler?: ActivitySyncScheduler;
+  onSchedulerError?(error: unknown, userId: string): void;
+}
+
+async function runScheduler(
+  deps: IcuConnectDeps,
+  userId: string,
+  action: 'schedule' | 'unschedule'
+): Promise<void> {
+  if (!deps.scheduler) return;
+  try {
+    await deps.scheduler[action](userId);
+  } catch (error) {
+    deps.onSchedulerError?.(error, userId);
+  }
 }
 
 export const MSG_INVALID_CREDENTIALS =
@@ -86,15 +107,21 @@ export async function handleConnectIcu(
     throw error;
   }
 
-  await deps.repo.upsert({
-    userId,
-    icuAthleteId: creds.athleteId,
-    icuAthleteName: athleteName,
-    apiKeyCiphertext: creds.apiKeyCiphertext,
-    apiKeyIv: creds.apiKeyIv,
-  });
+  const prev = await deps.repo.findByUserId(userId);
+  await deps.repo.upsert(
+    {
+      userId,
+      icuAthleteId: creds.athleteId,
+      icuAthleteName: athleteName,
+      apiKeyCiphertext: creds.apiKeyCiphertext,
+      apiKeyIv: creds.apiKeyIv,
+    },
+    // Same athlete re-linked (e.g. rotated key): keep the cursor. Different athlete: backfill again
+    { resetSync: prev !== null && prev.icuAthleteId !== creds.athleteId }
+  );
+  await runScheduler(deps, userId, 'schedule');
 
-  return `✅ Connected to intervals.icu as ${athleteName} (${creds.athleteId}).\n\nUse /connect status to check the link or /disconnect icu to remove it.`;
+  return `✅ Connected to intervals.icu as ${athleteName} (${creds.athleteId}).\n\nYour recent activities are syncing now and will refresh automatically (or run /sync).\nUse /connect status to check the link or /disconnect icu to remove it.`;
 }
 
 function formatSyncTime(date: Date | null): string {
@@ -125,6 +152,7 @@ export async function handleConnectStatus(userId: string, deps: IcuConnectDeps):
 
 export async function handleDisconnectIcu(userId: string, deps: IcuConnectDeps): Promise<string> {
   const deleted = await deps.repo.deleteByUserId(userId);
+  if (deleted) await runScheduler(deps, userId, 'unschedule');
   return deleted
     ? '✅ intervals.icu disconnected. Your stored API key was deleted.'
     : MSG_NOT_CONNECTED;
