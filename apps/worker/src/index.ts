@@ -1,10 +1,17 @@
 import 'dotenv/config';
 import { Worker, Job } from 'bullmq';
 import { Bot } from 'grammy';
-import { getConfig } from '@triathlon/core';
+import { getConfig, getEncKeys } from '@triathlon/core';
 import type { CommandJob } from '@triathlon/core';
+import { IcuClient } from '@triathlon/integrations-icu';
 import { logger } from './logger';
-import { prisma, ensureUser, checkMessageProcessed, markMessageProcessed } from './db';
+import {
+  prisma,
+  ensureUser,
+  checkMessageProcessed,
+  markMessageProcessed,
+  icuConnectionRepo,
+} from './db';
 import {
   handleStart,
   handleProfile,
@@ -13,12 +20,24 @@ import {
   handleLog,
   handleUnknown,
 } from './handlers';
+import {
+  handleConnectIcu,
+  handleConnectStatus,
+  handleDisconnectIcu,
+  type IcuConnectDeps,
+} from './icu-connect';
 
 const config = getConfig();
 
 // Create Telegram API client for sending messages
 const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
 const api = bot.api;
+
+const icuConnectDeps: IcuConnectDeps = {
+  repo: icuConnectionRepo,
+  keys: getEncKeys(config),
+  createClient: (athleteId, apiKey) => new IcuClient({ athleteId, apiKey }),
+};
 
 // Create worker
 const worker = new Worker<CommandJob>(
@@ -102,6 +121,28 @@ const worker = new Worker<CommandJob>(
               }
             }
           }
+          break;
+
+        case 'connect_icu':
+          // Enqueued by the bot at the end of the /connect icu dialog
+          response = job.data.icuCredentials
+            ? await handleConnectIcu(user.id, job.data.icuCredentials, icuConnectDeps)
+            : '❌ Missing credentials. Please run /connect icu again.';
+          break;
+
+        case 'connect':
+          // `/connect icu` itself is handled by the bot dialog
+          response =
+            args[0]?.toLowerCase() === 'status'
+              ? await handleConnectStatus(user.id, icuConnectDeps)
+              : '❌ Usage: /connect icu | /connect status';
+          break;
+
+        case 'disconnect':
+          response =
+            args[0]?.toLowerCase() === 'icu'
+              ? await handleDisconnectIcu(user.id, icuConnectDeps)
+              : '❌ Usage: /disconnect icu';
           break;
 
         case 'unknown':

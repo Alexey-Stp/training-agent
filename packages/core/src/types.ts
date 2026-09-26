@@ -65,6 +65,14 @@ export interface CommandJob {
   commandName: string;
   args: string[];
   rawText: string;
+  /** Set only for `connect_icu` jobs. The API key is encrypted by the bot before enqueueing. */
+  icuCredentials?: IcuCredentialsPayload;
+}
+
+export interface IcuCredentialsPayload {
+  athleteId: string;
+  apiKeyCiphertext: string;
+  apiKeyIv: string;
 }
 
 export const HARD_INTENSITIES = new Set<Intensity>([Intensity.z4, Intensity.z5]);

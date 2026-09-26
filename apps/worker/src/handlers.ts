@@ -35,6 +35,9 @@ Available commands:
   • /log swim 45 z2
   • /log bike 90 z4
   • /log run 60
+/connect icu - Link your intervals.icu account
+/connect status - Show your intervals.icu link
+/disconnect icu - Remove your intervals.icu link
 ${profileInfo}`;
 }
 

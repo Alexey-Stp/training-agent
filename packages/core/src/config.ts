@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import { isValidEncKey, parseEncKey } from './crypto';
+
+const encKeySchema = z
+  .string()
+  .refine(isValidEncKey, 'must be base64 of 32 bytes (openssl rand -base64 32)');
 
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
@@ -8,6 +13,8 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
   DEFAULT_TIMEZONE: z.string().default('Europe/Prague'),
+  SECRETS_ENC_KEY: encKeySchema,
+  SECRETS_ENC_KEY_PREVIOUS: encKeySchema.optional(),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
@@ -33,4 +40,16 @@ export function getConfig(): EnvConfig {
     return loadConfig();
   }
   return cachedConfig;
+}
+
+/**
+ * Encryption keyring for stored secrets: current key first (used for encrypt),
+ * then the previous key (decrypt-only) during a rotation.
+ */
+export function getEncKeys(config: EnvConfig = getConfig()): Buffer[] {
+  const keys = [parseEncKey(config.SECRETS_ENC_KEY)];
+  if (config.SECRETS_ENC_KEY_PREVIOUS) {
+    keys.push(parseEncKey(config.SECRETS_ENC_KEY_PREVIOUS));
+  }
+  return keys;
 }
