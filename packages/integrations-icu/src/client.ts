@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { IcuAuthError, IcuContractError, IcuRateLimitError } from './errors';
+import {
+  IcuAuthError,
+  IcuContractError,
+  IcuHttpError,
+  IcuRateLimitError,
+  IcuServerError,
+} from './errors';
 import {
   ActivityListSchema,
   AthleteSchema,
@@ -50,9 +56,14 @@ export class IcuClient {
   /**
    * Executes a fetch with exponential backoff retry on 429 / 5xx.
    * Throws IcuAuthError immediately on 401 (no retry).
-   * Throws IcuRateLimitError after MAX_RETRIES exhaustion.
+   * Throws IcuRateLimitError (429) or IcuServerError (5xx) after MAX_RETRIES exhaustion.
+   * Throws IcuHttpError on any other non-OK status.
    */
-  private async executeWithRetry(url: string, init?: RequestInit): Promise<Response> {
+  private async executeWithRetry(
+    url: string,
+    endpoint: string,
+    init?: RequestInit
+  ): Promise<Response> {
     const headers: Record<string, string> = {
       Authorization: this.authHeader,
       Accept: 'application/json',
@@ -85,19 +96,19 @@ export class IcuClient {
 
       // Other 4xx — not retriable
       const body = await response.text().catch(() => '');
-      throw new Error(`ICU API error ${response.status.toString()}: ${body}`);
+      throw new IcuHttpError(response.status, endpoint, body);
     }
 
     if (lastStatus === 429) {
       throw new IcuRateLimitError();
     }
-    throw new IcuRateLimitError(`Server error ${lastStatus.toString()} after ${MAX_RETRIES.toString()} retries`);
+    throw new IcuServerError(lastStatus, MAX_RETRIES);
   }
 
   private async parseResponse<T>(
     response: Response,
     schema: z.ZodType<T>,
-    endpoint: string,
+    endpoint: string
   ): Promise<T> {
     const json: unknown = await response.json();
     const result = schema.safeParse(json);
@@ -109,57 +120,67 @@ export class IcuClient {
 
   /** GET /athlete/:id */
   async getAthlete(): Promise<Athlete> {
+    const endpoint = 'GET /athlete/:id';
     const url = `${ICU_BASE_URL}/athlete/${this.athleteId}`;
-    const response = await this.executeWithRetry(url);
-    return this.parseResponse(response, AthleteSchema, 'GET /athlete/:id');
+    const response = await this.executeWithRetry(url, endpoint);
+    return this.parseResponse(response, AthleteSchema, endpoint);
   }
 
   /** GET /athlete/:id/activities?oldest=&newest= */
   async listActivities(oldest: string, newest: string): Promise<ActivityList> {
     const params = new URLSearchParams({ oldest, newest }).toString();
+    const endpoint = 'GET /athlete/:id/activities';
     const url = `${ICU_BASE_URL}/athlete/${this.athleteId}/activities?${params}`;
-    const response = await this.executeWithRetry(url);
-    return this.parseResponse(response, ActivityListSchema, 'GET /athlete/:id/activities');
+    const response = await this.executeWithRetry(url, endpoint);
+    return this.parseResponse(response, ActivityListSchema, endpoint);
   }
 
   /** GET /athlete/:id/wellness?oldest=&newest= */
   async listWellness(oldest: string, newest: string): Promise<WellnessList> {
     const params = new URLSearchParams({ oldest, newest }).toString();
+    const endpoint = 'GET /athlete/:id/wellness';
     const url = `${ICU_BASE_URL}/athlete/${this.athleteId}/wellness?${params}`;
-    const response = await this.executeWithRetry(url);
-    return this.parseResponse(response, WellnessListSchema, 'GET /athlete/:id/wellness');
+    const response = await this.executeWithRetry(url, endpoint);
+    return this.parseResponse(response, WellnessListSchema, endpoint);
   }
 
-  /** GET /athlete/:id/events */
-  async listEvents(): Promise<EventList> {
-    const url = `${ICU_BASE_URL}/athlete/${this.athleteId}/events`;
-    const response = await this.executeWithRetry(url);
-    return this.parseResponse(response, EventListSchema, 'GET /athlete/:id/events');
+  /** GET /athlete/:id/events?oldest=&newest= (both optional) */
+  async listEvents(oldest?: string, newest?: string): Promise<EventList> {
+    const endpoint = 'GET /athlete/:id/events';
+    const params = new URLSearchParams();
+    if (oldest !== undefined) params.set('oldest', oldest);
+    if (newest !== undefined) params.set('newest', newest);
+    const query = params.toString();
+    const url = `${ICU_BASE_URL}/athlete/${this.athleteId}/events${query ? `?${query}` : ''}`;
+    const response = await this.executeWithRetry(url, endpoint);
+    return this.parseResponse(response, EventListSchema, endpoint);
   }
 
   /** POST /athlete/:id/events */
   async createEvent(data: CreateEventInput): Promise<IcuEvent> {
+    const endpoint = 'POST /athlete/:id/events';
     const url = `${ICU_BASE_URL}/athlete/${this.athleteId}/events`;
-    const response = await this.executeWithRetry(url, {
+    const response = await this.executeWithRetry(url, endpoint, {
       method: 'POST',
       body: JSON.stringify(data),
     });
-    return this.parseResponse(response, EventSchema, 'POST /athlete/:id/events');
+    return this.parseResponse(response, EventSchema, endpoint);
   }
 
   /** PUT /athlete/:id/events/:eventId */
   async updateEvent(eventId: number, data: UpdateEventInput): Promise<IcuEvent> {
     const url = `${ICU_BASE_URL}/athlete/${this.athleteId}/events/${eventId.toString()}`;
-    const response = await this.executeWithRetry(url, {
+    const endpoint = 'PUT /athlete/:id/events/:id';
+    const response = await this.executeWithRetry(url, endpoint, {
       method: 'PUT',
       body: JSON.stringify(data),
     });
-    return this.parseResponse(response, EventSchema, 'PUT /athlete/:id/events/:id');
+    return this.parseResponse(response, EventSchema, endpoint);
   }
 
   /** DELETE /athlete/:id/events/:eventId */
   async deleteEvent(eventId: number): Promise<void> {
     const url = `${ICU_BASE_URL}/athlete/${this.athleteId}/events/${eventId.toString()}`;
-    await this.executeWithRetry(url, { method: 'DELETE' });
+    await this.executeWithRetry(url, 'DELETE /athlete/:id/events/:id', { method: 'DELETE' });
   }
 }

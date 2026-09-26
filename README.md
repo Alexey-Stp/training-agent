@@ -57,6 +57,7 @@ Automated checks on every push and PR:
 - ✅ **Dependencies** - Automated Dependabot updates
 
 **Quick Commands:**
+
 ```bash
 npm run lint          # Lint code
 npm run format        # Format code
@@ -119,6 +120,7 @@ See [CI_CD.md](CI_CD.md) for complete CI/CD documentation.
 ### Default Profile
 
 New users automatically get:
+
 - **FTP**: 355W
 - **Timezone**: Europe/Prague
 - **Swim Days**: Wed (technique), Fri (intervals), Sun (optional)
@@ -139,6 +141,27 @@ The plan generator applies these rules automatically:
 #### Soft Rules (Optimize Structure)
 
 4. **SwimRotation**: Enforce Wed = technique, Fri = intervals.
+
+## intervals.icu Integration
+
+`packages/integrations-icu` (`@triathlon/integrations-icu`) is a typed REST client for [intervals.icu](https://intervals.icu). The bot and worker do not use it yet. Sync jobs and persistence come in E1-T3/T4.
+
+- **Auth**: HTTP Basic, username `API_KEY`, password = athlete API key. Set `ICU_ATHLETE_ID` and `ICU_API_KEY` in `.env` (see `.env.example`).
+- **Methods**: `getAthlete`, `listActivities(oldest, newest)`, `listWellness(oldest, newest)`, `listEvents(oldest?, newest?)`, `createEvent`, `updateEvent`, `deleteEvent`.
+- **Resilience**: exponential backoff, up to 3 retries on 429/5xx. Responses are validated with Zod, and unknown fields are allowed.
+- **Errors**: `IcuAuthError` (401, no retry), `IcuRateLimitError` (429 after retries), `IcuServerError` (5xx after retries), `IcuHttpError` (other 4xx), `IcuContractError` (response failed schema validation, includes the endpoint name).
+
+```ts
+import { IcuClient } from '@triathlon/integrations-icu';
+
+const icu = new IcuClient({
+  athleteId: process.env.ICU_ATHLETE_ID!,
+  apiKey: process.env.ICU_API_KEY!,
+});
+const activities = await icu.listActivities('2026-09-01', '2026-09-26');
+```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md#integrations-icu-package-packagesintegrations-icu) for details.
 
 ## Setup Instructions
 
@@ -193,6 +216,7 @@ docker compose exec bot npx prisma db push
 ```
 
 The services will start:
+
 - **PostgreSQL**: localhost:5432
 - **Redis**: localhost:6379
 - **Bot**: Polling Telegram updates
@@ -390,6 +414,7 @@ npm run test -w @triathlon/core
 ```
 
 **Test Coverage**:
+
 - ✅ SwimRotation rule (Wed=technique, Fri=intervals)
 - ✅ ReadinessDownshift rule (fatigue-based adjustments)
 - ✅ NoHardHard rule (no consecutive hard sessions)

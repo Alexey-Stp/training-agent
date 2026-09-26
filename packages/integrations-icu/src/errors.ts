@@ -19,9 +19,30 @@ export class IcuAuthError extends Error {
 export class IcuContractError extends Error {
   constructor(
     public readonly endpoint: string,
-    public readonly zodError: unknown,
+    public readonly zodError: unknown
   ) {
     super(`Response contract violation for endpoint "${endpoint}"`);
     this.name = 'IcuContractError';
+  }
+}
+
+export class IcuServerError extends Error {
+  constructor(
+    public readonly status: number,
+    retries: number
+  ) {
+    super(`Server error ${status.toString()} after ${retries.toString()} retries`);
+    this.name = 'IcuServerError';
+  }
+}
+
+export class IcuHttpError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly endpoint: string,
+    public readonly body: string
+  ) {
+    super(`ICU API error ${status.toString()} for endpoint "${endpoint}": ${body}`);
+    this.name = 'IcuHttpError';
   }
 }

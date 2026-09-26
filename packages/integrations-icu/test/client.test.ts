@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { IcuClient } from '../src/client';
-import { IcuAuthError, IcuContractError, IcuRateLimitError } from '../src/errors';
+import {
+  IcuAuthError,
+  IcuContractError,
+  IcuHttpError,
+  IcuRateLimitError,
+  IcuServerError,
+} from '../src/errors';
 import athleteFixture from './fixtures/athlete.json';
 import activitiesFixture from './fixtures/activities.json';
 import wellnessFixture from './fixtures/wellness.json';
@@ -102,6 +108,27 @@ describe('IcuClient.listEvents', () => {
     expect(result[0].id).toBe(eventsFixture[0].id);
     expect(result[0].name).toBe(eventsFixture[0].name);
   });
+
+  it('passes oldest/newest as query params when given', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse(eventsFixture));
+    const client = new IcuClient({ ...BASE_CONFIG, fetch: mockFetch });
+
+    await client.listEvents('2026-01-01', '2026-01-31');
+
+    const [url] = mockFetch.mock.calls[0] as [string];
+    expect(url).toContain('oldest=2026-01-01');
+    expect(url).toContain('newest=2026-01-31');
+  });
+
+  it('omits the query string when no range is given', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse(eventsFixture));
+    const client = new IcuClient({ ...BASE_CONFIG, fetch: mockFetch });
+
+    await client.listEvents();
+
+    const [url] = mockFetch.mock.calls[0] as [string];
+    expect(url).toBe('https://intervals.icu/api/v1/athlete/i12345/events');
+  });
 });
 
 // ── createEvent ───────────────────────────────────────────────────────────────
@@ -189,13 +216,42 @@ describe('IcuClient rate limit errors', () => {
     await expect(client.getAthlete()).rejects.toThrow(IcuRateLimitError);
     expect(mockFetch).toHaveBeenCalledTimes(4); // initial + 3 retries
   });
+});
 
-  it('5xx × 4: throws after exhausting retries', async () => {
+describe('IcuClient server and http errors', () => {
+  it('5xx × 4: throws IcuServerError after exhausting retries', async () => {
     const mockFetch = vi.fn().mockResolvedValue(jsonResponse({ error: 'Server Error' }, 503));
     const client = new IcuClient({ ...BASE_CONFIG, fetch: mockFetch });
 
-    await expect(client.getAthlete()).rejects.toThrow(IcuRateLimitError);
+    const err = await client.getAthlete().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(IcuServerError);
+    expect((err as IcuServerError).status).toBe(503);
     expect(mockFetch).toHaveBeenCalledTimes(4);
+  });
+
+  it('500 then 200: succeeds after one retry', async () => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ error: 'Server Error' }, 500))
+      .mockResolvedValueOnce(jsonResponse(athleteFixture));
+    const client = new IcuClient({ ...BASE_CONFIG, fetch: mockFetch });
+
+    const result = await client.getAthlete();
+
+    expect(result.id).toBe(athleteFixture.id);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('404: throws IcuHttpError with endpoint name, no retry', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response('Not Found', { status: 404 }));
+    const client = new IcuClient({ ...BASE_CONFIG, fetch: mockFetch });
+
+    const err = await client.deleteEvent(999).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(IcuHttpError);
+    expect((err as IcuHttpError).status).toBe(404);
+    expect((err as IcuHttpError).endpoint).toBe('DELETE /athlete/:id/events/:id');
+    expect((err as IcuHttpError).body).toBe('Not Found');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });
 
