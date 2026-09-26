@@ -73,13 +73,19 @@ export async function markMessageProcessed(userId: string, messageId: number): P
 }
 
 export const icuConnectionRepo: IcuConnectionRepo = {
-  async upsert(data) {
+  async upsert(data, { resetSync }) {
     const { userId, ...fields } = data;
-    await prisma.icuConnection.upsert({
-      where: { userId },
-      create: data,
-      update: fields,
-    });
+    await prisma.$transaction([
+      prisma.icuConnection.upsert({
+        where: { userId },
+        create: data,
+        update: resetSync
+          ? { ...fields, lastActivitySyncAt: null, lastWellnessSyncAt: null }
+          : fields,
+      }),
+      // Activities of a previously linked athlete don't belong to this link
+      prisma.activity.deleteMany({ where: { userId, icuAthleteId: { not: data.icuAthleteId } } }),
+    ]);
   },
 
   findByUserId(userId) {
@@ -95,6 +101,7 @@ export const icuConnectionRepo: IcuConnectionRepo = {
 const activityFields = {
   icuId: true,
   userId: true,
+  icuAthleteId: true,
   sport: true,
   icuType: true,
   name: true,
@@ -130,7 +137,7 @@ export const activityRepo: ActivityRepo = {
           ? await tx.activity.createMany({ data: creates, skipDuplicates: true })
           : { count: 0 };
       for (const { icuId, ...data } of updates) {
-        await tx.activity.update({ where: { icuId }, data });
+        await tx.activity.update({ where: { userId_icuId: { userId, icuId } }, data });
       }
       await tx.icuConnection.update({ where: { userId }, data: { lastActivitySyncAt: cursor } });
       return { created: count };

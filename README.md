@@ -161,7 +161,8 @@ The plan generator applies these rules automatically:
 Once an athlete is linked, the worker pulls their activities from intervals.icu into the `Activity` table:
 
 - The first run (right after `/connect icu`) backfills the last 90 days (`ICU_ACTIVITY_BACKFILL_DAYS`).
-- After that it runs every 30 minutes (`ICU_ACTIVITY_SYNC_EVERY_MIN`). It re-reads from the last sync minus 2 days (`ICU_ACTIVITY_SYNC_OVERLAP_DAYS`) to catch late uploads.
+- After that it runs every 30 minutes (`ICU_ACTIVITY_SYNC_EVERY_MIN`). It re-reads from the last sync minus 2 days (`ICU_ACTIVITY_SYNC_OVERLAP_DAYS`), plus one day for timezones, to catch late uploads.
+- Re-linking a different athlete removes the previous athlete's activities and starts a fresh 90-day backfill.
 - `/sync` runs it immediately and replies with the number of new and updated activities.
 - Activities are keyed by their ICU id. A run with no new data writes nothing. If intervals.icu is down, the job is retried and the sync cursor stays where it was.
 - ICU types map to the local sport: Ride/VirtualRide/... → `bike`, Run/TrailRun/... → `run`, Swim/OpenWaterSwim → `swim`, WeightTraining → `strength`, anything else → `other`.

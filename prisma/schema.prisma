@@ -109,8 +109,9 @@ model IcuConnection {
 // Executed activity pulled from intervals.icu (see apps/worker/src/activity-sync.ts)
 model Activity {
   id             String   @id @default(cuid())
-  icuId          String   @unique
+  icuId          String
   userId         String
+  icuAthleteId   String   // athlete it was synced from; re-linking another athlete purges these
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   sport          Sport
   icuType        String   // raw ICU type, e.g. "VirtualRide"
@@ -126,5 +127,6 @@ model Activity {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
+  @@unique([userId, icuId])
   @@index([userId, startTime])
 }

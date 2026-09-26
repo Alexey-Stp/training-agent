@@ -24,8 +24,8 @@ import {
 
 class MemoryRepo implements IcuConnectionRepo {
   readonly rows = new Map<string, IcuConnectionRecord>();
-  upsert(data: Parameters<IcuConnectionRepo['upsert']>[0]) {
-    const prev = this.rows.get(data.userId);
+  upsert(data: Parameters<IcuConnectionRepo['upsert']>[0], { resetSync }: { resetSync: boolean }) {
+    const prev = resetSync ? undefined : this.rows.get(data.userId);
     this.rows.set(data.userId, {
       lastActivitySyncAt: prev?.lastActivitySyncAt ?? null,
       lastWellnessSyncAt: prev?.lastWellnessSyncAt ?? null,
@@ -129,6 +129,35 @@ describe('handleConnectIcu', () => {
     const row = ok.repo.rows.get(USER_ID)!;
     expect(row.icuAthleteId).toBe('i99999');
     expect(decryptSecret({ ciphertext: row.apiKeyCiphertext, iv: row.apiKeyIv }, KEY)).toBe(newKey);
+  });
+});
+
+describe('handleConnectIcu: sync cursor on re-link', () => {
+  const SYNCED_AT = new Date('2026-09-20T08:00:00Z');
+
+  it('same athlete (e.g. new key): cursor kept', async () => {
+    await handleConnectIcu(USER_ID, creds(), ok.deps);
+    ok.repo.rows.get(USER_ID)!.lastActivitySyncAt = SYNCED_AT;
+
+    await handleConnectIcu(USER_ID, creds('rotated-icu-api-key-000000'), ok.deps);
+    expect(ok.repo.rows.get(USER_ID)!.lastActivitySyncAt).toEqual(SYNCED_AT);
+  });
+
+  it('different athlete: cursors reset so the new athlete gets a full backfill', async () => {
+    const upsert = vi.spyOn(ok.repo, 'upsert');
+    await handleConnectIcu(USER_ID, creds(), ok.deps);
+    ok.repo.rows.get(USER_ID)!.lastActivitySyncAt = SYNCED_AT;
+    ok.repo.rows.get(USER_ID)!.lastWellnessSyncAt = SYNCED_AT;
+
+    await handleConnectIcu(USER_ID, creds(API_KEY, 'i99999'), ok.deps);
+
+    expect(upsert.mock.calls.map(([, opts]) => opts)).toEqual([
+      { resetSync: false },
+      { resetSync: true },
+    ]);
+    const row = ok.repo.rows.get(USER_ID)!;
+    expect(row.lastActivitySyncAt).toBeNull();
+    expect(row.lastWellnessSyncAt).toBeNull();
   });
 });
 

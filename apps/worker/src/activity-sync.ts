@@ -9,6 +9,7 @@ import { MSG_NOT_CONNECTED, type IcuConnectionRecord } from './icu-connect';
 export interface ActivityData {
   icuId: string;
   userId: string;
+  icuAthleteId: string;
   sport: Sport;
   icuType: string;
   name: string;
@@ -98,15 +99,16 @@ function parseUtc(timestamp: string): Date {
   const hasOffset = /(Z|[+-]\d{2}:?\d{2})$/.test(timestamp);
   const date = new Date(hasOffset ? timestamp : `${timestamp}Z`);
   if (Number.isNaN(date.getTime())) {
-    throw new Error(`Invalid ICU activity timestamp: ${timestamp}`);
+    throw new TypeError(`Invalid ICU activity timestamp: ${timestamp}`);
   }
   return date;
 }
 
-export function mapIcuActivity(a: IcuActivity, userId: string): ActivityData {
+export function mapIcuActivity(a: IcuActivity, userId: string, icuAthleteId: string): ActivityData {
   return {
     icuId: a.id,
     userId,
+    icuAthleteId,
     sport: mapIcuSport(a.type),
     icuType: a.type,
     name: a.name,
@@ -138,22 +140,26 @@ function isSameActivity(a: ActivityData, b: ActivityData): boolean {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const TZ_MARGIN_DAYS = 1;
 
 function utcDate(date: Date, offsetDays = 0): string {
   return new Date(date.getTime() + offsetDays * DAY_MS).toISOString().slice(0, 10);
 }
 
 /**
- * Fetch window as ICU `yyyy-MM-dd` dates (UTC). First sync: `backfillDays` back.
- * Incremental: from the cursor minus `overlapDays`. `newest` is tomorrow so no timezone is cut off.
+ * Fetch window as ICU `yyyy-MM-dd` dates. ICU filters by the athlete's local date, which can be
+ * a day behind or ahead of UTC, so both ends get one extra day of margin.
+ * First sync: `backfillDays` back. Incremental: from the cursor minus `overlapDays`.
  */
 export function computeWindow(
   cursor: Date | null,
   now: Date,
   cfg: Pick<ActivitySyncDeps, 'backfillDays' | 'overlapDays'>
 ): { oldest: string; newest: string } {
-  const oldest = cursor ? utcDate(cursor, -cfg.overlapDays) : utcDate(now, -cfg.backfillDays);
-  return { oldest, newest: utcDate(now, 1) };
+  const oldest = cursor
+    ? utcDate(cursor, -(cfg.overlapDays + TZ_MARGIN_DAYS))
+    : utcDate(now, -cfg.backfillDays);
+  return { oldest, newest: utcDate(now, TZ_MARGIN_DAYS) };
 }
 
 /**
@@ -176,7 +182,7 @@ export async function syncActivities(userId: string, deps: ActivitySyncDeps): Pr
 
   // ICU may list an activity twice across pages/edits: last one wins
   const incoming = new Map<string, ActivityData>();
-  for (const a of icuActivities) incoming.set(a.id, mapIcuActivity(a, userId));
+  for (const a of icuActivities) incoming.set(a.id, mapIcuActivity(a, userId, conn.icuAthleteId));
 
   const existing = new Map(
     (await deps.repo.findByIcuIds(userId, [...incoming.keys()])).map((row) => [row.icuId, row])

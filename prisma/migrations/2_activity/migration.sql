@@ -6,6 +6,7 @@ CREATE TABLE "Activity" (
     "id" TEXT NOT NULL,
     "icuId" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
+    "icuAthleteId" TEXT NOT NULL,
     "sport" "Sport" NOT NULL,
     "icuType" TEXT NOT NULL,
     "name" TEXT NOT NULL,
@@ -24,7 +25,7 @@ CREATE TABLE "Activity" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "Activity_icuId_key" ON "Activity"("icuId");
+CREATE UNIQUE INDEX "Activity_userId_icuId_key" ON "Activity"("userId", "icuId");
 
 -- CreateIndex
 CREATE INDEX "Activity_userId_startTime_idx" ON "Activity"("userId", "startTime");

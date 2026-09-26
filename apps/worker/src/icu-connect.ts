@@ -29,8 +29,12 @@ export interface IcuConnectionUpsert {
 }
 
 export interface IcuConnectionRepo {
-  /** One connection per user: re-linking overwrites the previous credentials. */
-  upsert(data: IcuConnectionUpsert): Promise<void>;
+  /**
+   * One connection per user: re-linking overwrites the previous credentials and
+   * removes the user's activities synced from any other athlete. `resetSync`
+   * clears the sync cursors so the new athlete gets a full backfill.
+   */
+  upsert(data: IcuConnectionUpsert, opts: { resetSync: boolean }): Promise<void>;
   findByUserId(userId: string): Promise<IcuConnectionRecord | null>;
   /** Returns true if a connection was deleted. */
   deleteByUserId(userId: string): Promise<boolean>;
@@ -103,13 +107,18 @@ export async function handleConnectIcu(
     throw error;
   }
 
-  await deps.repo.upsert({
-    userId,
-    icuAthleteId: creds.athleteId,
-    icuAthleteName: athleteName,
-    apiKeyCiphertext: creds.apiKeyCiphertext,
-    apiKeyIv: creds.apiKeyIv,
-  });
+  const prev = await deps.repo.findByUserId(userId);
+  await deps.repo.upsert(
+    {
+      userId,
+      icuAthleteId: creds.athleteId,
+      icuAthleteName: athleteName,
+      apiKeyCiphertext: creds.apiKeyCiphertext,
+      apiKeyIv: creds.apiKeyIv,
+    },
+    // Same athlete re-linked (e.g. rotated key): keep the cursor. Different athlete: backfill again
+    { resetSync: prev !== null && prev.icuAthleteId !== creds.athleteId }
+  );
   await runScheduler(deps, userId, 'schedule');
 
   return `✅ Connected to intervals.icu as ${athleteName} (${creds.athleteId}).\n\nYour recent activities are syncing now and will refresh automatically (or run /sync).\nUse /connect status to check the link or /disconnect icu to remove it.`;

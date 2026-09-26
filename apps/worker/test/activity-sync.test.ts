@@ -145,6 +145,7 @@ describe('syncActivities: first sync (backfill)', () => {
     expect(ride).toEqual({
       icuId: 'i1001',
       userId: USER_ID,
+      icuAthleteId: 'i12345',
       sport: Sport.bike,
       icuType: 'Ride',
       name: 'Endurance Ride',
@@ -183,8 +184,8 @@ describe('syncActivities: incremental', () => {
 
     expect(result).toMatchObject({ status: 'ok', created: 0, updated: 0, unchanged: 6 });
     expect(repo.snapshot()).toEqual(before);
-    // Incremental window: cursor date minus the overlap
-    expect(listActivities).toHaveBeenLastCalledWith('2026-09-24', '2026-09-27');
+    // Incremental window: cursor date minus the overlap and one timezone day
+    expect(listActivities).toHaveBeenLastCalledWith('2026-09-23', '2026-09-27');
   });
 
   it('a new activity results in exactly one insert', async () => {
@@ -243,7 +244,7 @@ describe('syncActivities: failure keeps the cursor', () => {
 
     await syncActivities(USER_ID, deps);
     expect(listActivities.mock.calls.at(-2)).toEqual(listActivities.mock.calls.at(-1));
-    expect(listActivities).toHaveBeenLastCalledWith('2026-09-24', '2026-09-29');
+    expect(listActivities).toHaveBeenLastCalledWith('2026-09-23', '2026-09-29');
     expect(repo.connection!.lastActivitySyncAt).toEqual(now);
   });
 
@@ -283,10 +284,18 @@ describe('computeWindow', () => {
     });
   });
 
-  it('incremental sync starts overlapDays before the cursor', () => {
+  it('incremental sync starts overlapDays plus a timezone day before the cursor', () => {
     const cursor = new Date('2026-09-20T23:59:00Z');
     expect(computeWindow(cursor, NOW, { backfillDays: 90, overlapDays: 2 }).oldest).toBe(
-      '2026-09-18'
+      '2026-09-17'
+    );
+  });
+
+  it('overlap 0 still re-reads the previous UTC day (athletes west of UTC)', () => {
+    // 01:00 UTC on the 21st is still the 20th in the Americas
+    const cursor = new Date('2026-09-21T01:00:00Z');
+    expect(computeWindow(cursor, NOW, { backfillDays: 90, overlapDays: 0 }).oldest).toBe(
+      '2026-09-20'
     );
   });
 });

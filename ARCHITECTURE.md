@@ -184,10 +184,10 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 6. **IcuConnection** - intervals.icu account link
    - `icuAthleteId`, `icuAthleteName`, `apiKeyCiphertext` (base64 ciphertext‖GCM tag), `apiKeyIv`
    - `lastActivitySyncAt` (activity sync cursor), `lastWellnessSyncAt` (set by the future wellness sync)
-   - Unique on userId: one connection per user, re-linking overwrites
+   - Unique on userId: one connection per user, re-linking overwrites. Re-linking a different athlete resets both sync cursors and deletes the user's activities from the old athlete
 
 7. **Activity** - executed training pulled from intervals.icu
-   - `icuId` (unique), `sport` (`other` for unmapped ICU types), raw `icuType`, `name`
+   - `icuId` + `userId` (unique together, so two users may link the same athlete), `icuAthleteId`, `sport` (`other` for unmapped ICU types), raw `icuType`, `name`
    - `startTime` (UTC), `startDateLocal` (`yyyy-MM-dd`), `durationSec`, `distanceM`, `load` (`icu_training_load`), `avgHr`, `avgPower`, `source`
    - Indexed on (userId, startTime)
 
@@ -226,10 +226,10 @@ icu-activity-sync → syncActivities(userId)
 
 `syncActivities` does the following:
 
-1. **Window.** `oldest` is `today − ICU_ACTIVITY_BACKFILL_DAYS` if there is no cursor, otherwise `date(lastActivitySyncAt) − ICU_ACTIVITY_SYNC_OVERLAP_DAYS`. `newest` is tomorrow (UTC dates).
+1. **Window.** `oldest` is `today − ICU_ACTIVITY_BACKFILL_DAYS` if there is no cursor, otherwise `date(lastActivitySyncAt) − ICU_ACTIVITY_SYNC_OVERLAP_DAYS − 1`. `newest` is tomorrow. The dates are UTC, but ICU filters by the athlete's local date, which can differ by a day, so both ends get one day of margin.
 2. **Fetch.** `IcuClient.listActivities(oldest, newest)`.
 3. **Map.** `mapIcuActivity` converts each ICU activity to a local row.
-4. **Diff.** It loads existing rows by `icuId` and compares the mapped fields. New rows go to `createMany({skipDuplicates})`, changed rows get `update`, and equal rows are skipped. A run with no new data therefore modifies zero rows.
+4. **Diff.** It loads the user's existing rows by `icuId` and compares the mapped fields. New rows go to `createMany({skipDuplicates})`, changed rows get `update`, and equal rows are skipped. A run with no new data therefore modifies zero rows.
 5. **Write.** Rows and `lastActivitySyncAt = <time before fetch>` are written in one `$transaction`, so the cursor only moves when the fetch and all writes succeed.
 
 Failures:
