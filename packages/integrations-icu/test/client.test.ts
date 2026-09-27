@@ -94,8 +94,21 @@ describe('IcuClient.listWellness', () => {
 
     expect(result).toHaveLength(wellnessFixture.length);
     expect(result[0].id).toBe(wellnessFixture[0].id);
+    expect(result[0]).toMatchObject({ ctl: 52.3, atl: 58.1, hrv: 72, sleepSecs: 27000 });
+    expect(result[1].weight).toBeUndefined();
     // Unknown fields tolerated
-    expect((result[0] as Record<string, unknown>).ctl).toBe(52.3);
+    expect((result[0] as Record<string, unknown>).rampRate).toBe(-0.8);
+  });
+
+  it('null metrics (no HRV strap) pass the contract', async () => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(jsonResponse([{ id: '2024-01-17', hrv: null, restingHR: null, ctl: 51 }]));
+    const client = new IcuClient({ ...BASE_CONFIG, fetch: mockFetch });
+
+    const [day] = await client.listWellness('2024-01-17', '2024-01-17');
+
+    expect(day).toMatchObject({ hrv: null, restingHR: null, ctl: 51 });
   });
 });
 

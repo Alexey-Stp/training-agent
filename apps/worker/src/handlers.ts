@@ -38,7 +38,7 @@ Available commands:
 /connect icu - Link your intervals.icu account
 /connect status - Show your intervals.icu link
 /disconnect icu - Remove your intervals.icu link
-/sync - Pull your latest intervals.icu activities now
+/sync - Pull your latest intervals.icu activities and wellness now
 ${profileInfo}`;
 }
 
@@ -228,8 +228,8 @@ async function getRulesContext(userId: string, startDate: string): Promise<Rules
     [] as { date: string; minutes: number }[]
   );
 
-  // Get today's fatigue if exists
-  const fatigue = await prisma.fatigue.findUnique({
+  // Today's wellness (synced device data + check-in), if any
+  const wellness = await prisma.wellness.findUnique({
     where: {
       userId_date: {
         userId,
@@ -243,10 +243,13 @@ async function getRulesContext(userId: string, startDate: string): Promise<Rules
       totalMinutes,
       byDate,
     },
-    todayFatigue: fatigue
+    todayWellness: wellness
       ? {
-          readiness: fatigue.readiness || 3,
-          sleepScore: fatigue.sleepScore || undefined,
+          subjectiveReadiness: wellness.subjectiveReadiness,
+          sleepScore: wellness.sleepScore,
+          hrv: wellness.hrv,
+          restingHr: wellness.restingHr,
+          tsb: wellness.tsb,
         }
       : undefined,
   };

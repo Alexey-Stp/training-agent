@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { applyRules } from '../src/rules-engine';
 import { WeekPlan, Sport, Intensity, RulesContext } from '../src/types';
 
+function wellness(subjectiveReadiness: number | null): RulesContext['todayWellness'] {
+  return { subjectiveReadiness, sleepScore: null, hrv: null, restingHr: null, tsb: null };
+}
+
 describe('Rules Engine', () => {
   describe('SwimRotation Rule', () => {
     it('should enforce Wed as technique and Fri as intervals', () => {
@@ -77,9 +81,7 @@ describe('Rules Engine', () => {
 
       const context: RulesContext = {
         last7dStats: { totalMinutes: 300, byDate: [] },
-        todayFatigue: {
-          readiness: 2,
-        },
+        todayWellness: wellness(2),
       };
 
       const result = applyRules(plan, context);
@@ -114,9 +116,7 @@ describe('Rules Engine', () => {
 
       const context: RulesContext = {
         last7dStats: { totalMinutes: 300, byDate: [] },
-        todayFatigue: {
-          readiness: 4,
-        },
+        todayWellness: wellness(4),
       };
 
       const result = applyRules(plan, context);
@@ -124,6 +124,34 @@ describe('Rules Engine', () => {
       const todaySession = result.sessions[0];
       expect(todaySession.intensity).toBe(Intensity.z5);
       expect(todaySession.title).not.toContain('downgraded');
+    });
+
+    it('should not downgrade when there is wellness data but no check-in', () => {
+      const plan: WeekPlan = {
+        startDate: '2026-02-10',
+        sessions: [
+          {
+            date: '2026-02-10',
+            sport: Sport.bike,
+            title: 'Bike VO2 Max',
+            durationMin: 70,
+            intensity: Intensity.z5,
+            tags: ['vo2'],
+          },
+        ],
+        warnings: [],
+        appliedRules: [],
+      };
+
+      const context: RulesContext = {
+        last7dStats: { totalMinutes: 300, byDate: [] },
+        todayWellness: { ...wellness(null)!, hrv: 40, tsb: -30 },
+      };
+
+      const result = applyRules(plan, context);
+
+      expect(result.sessions[0].intensity).toBe(Intensity.z5);
+      expect(result.appliedRules.some((r) => r.startsWith('ReadinessDownshift'))).toBe(false);
     });
   });
 

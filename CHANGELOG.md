@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- intervals.icu wellness sync (TA-11): `Wellness` model keyed on (userId, date) with device/ICU fields (HRV, resting HR, sleep, weight, CTL/ATL/TSB) and check-in fields (`subjectiveReadiness`, `soreness`). Repeatable daily `icu-wellness-sync` job per linked athlete (90-day backfill, then incremental via `lastWellnessSyncAt`), also run by `/sync`. Sync overwrites device fields and never writes check-in fields. New env vars `ICU_WELLNESS_SYNC_EVERY_MIN`, `ICU_WELLNESS_BACKFILL_DAYS`, `ICU_WELLNESS_SYNC_OVERLAP_DAYS`
+- `@triathlon/integrations-icu`: typed optional wellness metrics (`ctl`, `atl`, `restingHR`, `hrv`, `sleepSecs`, `sleepScore`, `weight`)
 - intervals.icu activity sync (TA-10): `Activity` model and `2_activity` migration (adds `other` to `Sport`), repeatable `icu-activity-sync` job per linked athlete on the `icu-sync` queue (90-day backfill, then incremental via `lastActivitySyncAt`), `/sync` command. New env vars `ICU_ACTIVITY_SYNC_EVERY_MIN`, `ICU_ACTIVITY_BACKFILL_DAYS`, `ICU_ACTIVITY_SYNC_OVERLAP_DAYS`
 - `@triathlon/integrations-icu`: typed optional activity metrics (`moving_time`, `distance`, `icu_training_load`, `average_heartrate`, `icu_average_watts`, `source`, ...)
 - `@triathlon/integrations-icu`: `listEvents(oldest?, newest?)` optional date range
@@ -23,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `Fatigue` replaced by `Wellness`: migration `3_wellness` copies existing rows and drops the table. `RulesContext.todayFatigue` is now `todayWellness`, and ReadinessDownshift reads `subjectiveReadiness`
 - Bot no longer logs full Telegram updates (metadata only)
 
 ## [1.0.0] - 2026-02-11

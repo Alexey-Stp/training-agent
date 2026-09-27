@@ -54,9 +54,10 @@ function applySwimRotationRule(plan: WeekPlan): WeekPlan {
   return { ...plan, sessions, appliedRules };
 }
 
-// Hard Rule 2: ReadinessDownshift - if fatigue/readiness <= 2, downgrade hard sessions in next 24h
+// Hard Rule 2: ReadinessDownshift - if today's subjective readiness <= 2, downgrade today's hard sessions
 function applyReadinessDownshiftRule(plan: WeekPlan, context: RulesContext): WeekPlan {
-  if (!context.todayFatigue || context.todayFatigue.readiness > 2) {
+  const readiness = context.todayWellness?.subjectiveReadiness;
+  if (readiness == null || readiness > 2) {
     return plan;
   }
 
@@ -69,18 +70,13 @@ function applyReadinessDownshiftRule(plan: WeekPlan, context: RulesContext): Wee
 
   sessions.forEach((session, idx) => {
     if (session.date === todayStr && isHardSession(session)) {
-      sessions[idx] = downgradeToEasy(
-        session,
-        `Low readiness (${context.todayFatigue!.readiness}/5)`
-      );
+      sessions[idx] = downgradeToEasy(session, `Low readiness (${readiness}/5)`);
       modified = true;
     }
   });
 
   if (modified) {
-    warnings.push(
-      `⚠️ Low readiness detected (${context.todayFatigue.readiness}/5). Hard sessions downgraded to Z2.`
-    );
+    warnings.push(`⚠️ Low readiness detected (${readiness}/5). Hard sessions downgraded to Z2.`);
     appliedRules.push('ReadinessDownshift: Downgraded hard sessions due to low readiness');
   }
 

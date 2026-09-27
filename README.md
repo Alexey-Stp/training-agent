@@ -119,7 +119,7 @@ See [CI_CD.md](CI_CD.md) for complete CI/CD documentation.
 - `/connect icu` - Link your intervals.icu account (asks for athlete ID, then API key)
 - `/connect status` - Show the linked athlete, masked API key and last sync times
 - `/disconnect icu` - Remove the link and the stored API key
-- `/sync` - Pull your latest intervals.icu activities now
+- `/sync` - Pull your latest intervals.icu activities and wellness now
 
 ### Default Profile
 
@@ -139,7 +139,7 @@ The plan generator applies these rules automatically:
 #### Hard Rules (Enforce Safety)
 
 1. **NoHardHard**: No consecutive hard days (Z4/Z5 or tagged vo2/threshold). Second day downgraded to Z2.
-2. **ReadinessDownshift**: If fatigue/readiness ≤ 2, downgrade today's hard sessions to Z2.
+2. **ReadinessDownshift**: If today's check-in readiness (`Wellness.subjectiveReadiness`) is ≤ 2, downgrade today's hard sessions to Z2.
 3. **WeeklyLoadCap**: Limit weekly volume to 110% of previous week (10% progressive overload). Scales durations proportionally, min 30min per session.
 
 #### Soft Rules (Optimize Structure)
@@ -148,7 +148,7 @@ The plan generator applies these rules automatically:
 
 ## intervals.icu Integration
 
-`packages/integrations-icu` (`@triathlon/integrations-icu`) is a typed REST client for [intervals.icu](https://intervals.icu). The worker uses it to validate credentials in `/connect icu` and to sync activities. Wellness sync comes in E1-T4.
+`packages/integrations-icu` (`@triathlon/integrations-icu`) is a typed REST client for [intervals.icu](https://intervals.icu). The worker uses it to validate credentials in `/connect icu` and to sync activities and wellness.
 
 ### Linking an account
 
@@ -166,6 +166,15 @@ Once an athlete is linked, the worker pulls their activities from intervals.icu 
 - `/sync` runs it immediately and replies with the number of new and updated activities.
 - Activities are keyed by their ICU id. A run with no new data writes nothing. If intervals.icu is down, the job is retried and the sync cursor stays where it was.
 - ICU types map to the local sport: Ride/VirtualRide/... → `bike`, Run/TrailRun/... → `run`, Swim/OpenWaterSwim → `swim`, WeightTraining → `strength`, anything else → `other`.
+
+### Wellness sync
+
+The worker also pulls daily wellness into the `Wellness` table, one row per athlete-local day: HRV (rMSSD), resting HR, sleep hours and score, weight, and ICU's CTL/ATL, with TSB computed as CTL − ATL.
+
+- The first run (right after `/connect icu`) backfills the last 90 days (`ICU_WELLNESS_BACKFILL_DAYS`). After that it runs daily (`ICU_WELLNESS_SYNC_EVERY_MIN=1440`) and re-reads the last 3 days (`ICU_WELLNESS_SYNC_OVERLAP_DAYS`), because ICU recomputes CTL/ATL when late activities arrive.
+- `/sync` pulls activities first, then wellness.
+- Merge rule: sync overwrites the device/ICU columns, nulls included (a night without the HRV strap stores `hrv = null`). It never writes the athlete's check-in columns (`subjectiveReadiness`, `soreness`), and it ignores ICU's own subjective fields.
+- Re-linking a different athlete clears the synced device columns and keeps the check-ins.
 
 Set `SECRETS_ENC_KEY` in `.env` (base64 of 32 bytes: `openssl rand -base64 32`). Both bot and worker need it. To rotate, move the old key to `SECRETS_ENC_KEY_PREVIOUS` and set a new `SECRETS_ENC_KEY`.
 

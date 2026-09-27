@@ -53,9 +53,13 @@ export interface RulesContext {
     totalMinutes: number;
     byDate: { date: string; minutes: number }[];
   };
-  todayFatigue?: {
-    readiness: number; // 1-5
-    sleepScore?: number;
+  /** Today's Wellness row (athlete-local date), if one exists. */
+  todayWellness?: {
+    subjectiveReadiness: number | null; // 1-5, athlete check-in
+    sleepScore: number | null;
+    hrv: number | null; // rMSSD, ms
+    restingHr: number | null;
+    tsb: number | null; // form = ctl - atl
   };
 }
 

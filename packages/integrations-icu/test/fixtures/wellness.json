@@ -6,7 +6,7 @@
     "rampRate": -0.8,
     "restingHR": 48,
     "hrv": 72,
-    "sleep": 7.5,
+    "sleepSecs": 27000,
     "sleepScore": 88,
     "weight": 68.5
   },
@@ -17,7 +17,7 @@
     "rampRate": -0.6,
     "restingHR": 47,
     "hrv": 75,
-    "sleep": 8.0,
+    "sleepSecs": 28800,
     "sleepScore": 91
   }
 ]

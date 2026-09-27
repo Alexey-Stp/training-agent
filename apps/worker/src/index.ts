@@ -12,6 +12,7 @@ import {
   markMessageProcessed,
   icuConnectionRepo,
   activityRepo,
+  wellnessRepo,
 } from './db';
 import {
   handleStart,
@@ -27,11 +28,16 @@ import {
   handleDisconnectIcu,
   type IcuConnectDeps,
 } from './icu-connect';
-import { handleSync, processSyncJob, type ActivitySyncDeps } from './activity-sync';
+import { processSyncJob, type ActivitySyncDeps } from './activity-sync';
+import { processWellnessSyncJob, type WellnessSyncDeps } from './wellness-sync';
+import { handleSync, type SyncCommandDeps } from './sync-command';
 import {
-  ACTIVITY_SYNC_QUEUE,
-  createActivitySyncScheduler,
+  ACTIVITY_SYNC_JOB,
+  ICU_SYNC_QUEUE,
+  WELLNESS_SYNC_JOB,
+  createIcuSyncScheduler,
   reconcileSchedulers,
+  type IcuSyncJobSpec,
 } from './sync-scheduler';
 
 const config = getConfig();
@@ -46,10 +52,14 @@ const redisConnection = {
 };
 const encKeys = getEncKeys(config);
 
-// intervals.icu activity sync: one repeatable job per linked athlete on the icu-sync queue
-const syncEveryMs = config.ICU_ACTIVITY_SYNC_EVERY_MIN * 60_000;
-const syncQueue = new Queue<IcuSyncJob>(ACTIVITY_SYNC_QUEUE, { connection: redisConnection });
-const activitySyncScheduler = createActivitySyncScheduler(syncQueue, syncEveryMs);
+// intervals.icu sync: per linked athlete, one repeatable activity job and one wellness job
+// on the icu-sync queue
+const syncJobs: IcuSyncJobSpec[] = [
+  { job: ACTIVITY_SYNC_JOB, everyMs: config.ICU_ACTIVITY_SYNC_EVERY_MIN * 60_000 },
+  { job: WELLNESS_SYNC_JOB, everyMs: config.ICU_WELLNESS_SYNC_EVERY_MIN * 60_000 },
+];
+const syncQueue = new Queue<IcuSyncJob>(ICU_SYNC_QUEUE, { connection: redisConnection });
+const icuSyncScheduler = createIcuSyncScheduler(syncQueue, syncJobs);
 
 const activitySyncDeps: ActivitySyncDeps = {
   repo: activityRepo,
@@ -60,13 +70,24 @@ const activitySyncDeps: ActivitySyncDeps = {
   overlapDays: config.ICU_ACTIVITY_SYNC_OVERLAP_DAYS,
 };
 
+const wellnessSyncDeps: WellnessSyncDeps = {
+  repo: wellnessRepo,
+  keys: encKeys,
+  createClient: (athleteId, apiKey) => new IcuClient({ athleteId, apiKey }),
+  now: () => new Date(),
+  backfillDays: config.ICU_WELLNESS_BACKFILL_DAYS,
+  overlapDays: config.ICU_WELLNESS_SYNC_OVERLAP_DAYS,
+};
+
+const syncCommandDeps: SyncCommandDeps = { activity: activitySyncDeps, wellness: wellnessSyncDeps };
+
 const icuConnectDeps: IcuConnectDeps = {
   repo: icuConnectionRepo,
   keys: encKeys,
   createClient: (athleteId, apiKey) => new IcuClient({ athleteId, apiKey }),
-  scheduler: activitySyncScheduler,
+  scheduler: icuSyncScheduler,
   onSchedulerError: (error, userId) => {
-    logger.error({ error, userId }, 'Failed to update activity sync schedule');
+    logger.error({ error, userId }, 'Failed to update intervals.icu sync schedule');
   },
 };
 
@@ -177,7 +198,7 @@ const worker = new Worker<CommandJob>(
           break;
 
         case 'sync':
-          response = await handleSync(user.id, activitySyncDeps);
+          response = await handleSync(user.id, syncCommandDeps);
           break;
 
         case 'unknown':
@@ -247,10 +268,16 @@ worker.on('error', (err) => {
 });
 
 const syncWorker = new Worker<IcuSyncJob>(
-  ACTIVITY_SYNC_QUEUE,
+  ICU_SYNC_QUEUE,
   async (job: Job<IcuSyncJob>) => {
-    const result = await processSyncJob(job.data, activitySyncDeps);
-    logger.info({ jobId: job.id, userId: job.data.userId, ...result }, 'Activity sync finished');
+    const result =
+      job.name === WELLNESS_SYNC_JOB
+        ? await processWellnessSyncJob(job.data, wellnessSyncDeps)
+        : await processSyncJob(job.data, activitySyncDeps);
+    logger.info(
+      { jobId: job.id, job: job.name, userId: job.data.userId, ...result },
+      'intervals.icu sync finished'
+    );
     return result;
   },
   { connection: redisConnection, concurrency: 2 }
@@ -258,8 +285,14 @@ const syncWorker = new Worker<IcuSyncJob>(
 
 syncWorker.on('failed', (job, err) => {
   logger.error(
-    { jobId: job?.id, userId: job?.data.userId, attempt: job?.attemptsMade, error: err },
-    'Activity sync failed'
+    {
+      jobId: job?.id,
+      job: job?.name,
+      userId: job?.data.userId,
+      attempt: job?.attemptsMade,
+      error: err,
+    },
+    'intervals.icu sync failed'
   );
 });
 
@@ -267,14 +300,14 @@ syncWorker.on('error', (err) => {
   logger.error({ error: err }, 'Sync worker error');
 });
 
-async function startActivitySync() {
+async function startIcuSync() {
   const userIds = await activityRepo.listConnectedUserIds();
-  const result = await reconcileSchedulers(syncQueue, activitySyncScheduler, userIds, syncEveryMs);
-  logger.info(result, 'Activity sync schedules reconciled');
+  const result = await reconcileSchedulers(syncQueue, icuSyncScheduler, userIds, syncJobs);
+  logger.info(result, 'intervals.icu sync schedules reconciled');
 }
 
-startActivitySync().catch((error: unknown) => {
-  logger.error({ error }, 'Failed to reconcile activity sync schedules');
+startIcuSync().catch((error: unknown) => {
+  logger.error({ error }, 'Failed to reconcile intervals.icu sync schedules');
 });
 
 logger.info('Worker started and listening for jobs...');

@@ -1,56 +1,81 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  createActivitySyncScheduler,
+  createIcuSyncScheduler,
   reconcileSchedulers,
-  activitySyncSchedulerId,
+  syncSchedulerId,
+  type IcuSyncJobSpec,
 } from '../src/sync-scheduler';
 
-const EVERY_MS = 30 * 60_000;
+const ACTIVITY_EVERY_MS = 30 * 60_000;
+const WELLNESS_EVERY_MS = 24 * 60 * 60_000;
+const JOBS: IcuSyncJobSpec[] = [
+  { job: 'icu-activity-sync', everyMs: ACTIVITY_EVERY_MS },
+  { job: 'icu-wellness-sync', everyMs: WELLNESS_EVERY_MS },
+];
 
 function fakeQueue(existing: { key: string; every?: number }[] = []) {
   return {
     upsertJobScheduler: vi.fn(() => Promise.resolve()),
     removeJobScheduler: vi.fn(() => Promise.resolve(true)),
     getJobSchedulers: vi.fn(() =>
-      Promise.resolve(existing.map((s) => ({ name: 'icu-activity-sync', ...s })))
+      Promise.resolve(existing.map((s) => ({ name: s.key.split(':')[0], ...s })))
     ),
   };
 }
 
-type SchedulerQueue = Parameters<typeof createActivitySyncScheduler>[0];
+type SchedulerQueue = Parameters<typeof createIcuSyncScheduler>[0];
 
-describe('createActivitySyncScheduler', () => {
-  it('upserts a per-athlete repeatable job with retries', async () => {
+/** Both schedulers of a user, both up to date. */
+function current(userId: string) {
+  return [
+    { key: `icu-activity-sync:${userId}`, every: ACTIVITY_EVERY_MS },
+    { key: `icu-wellness-sync:${userId}`, every: WELLNESS_EVERY_MS },
+  ];
+}
+
+describe('createIcuSyncScheduler', () => {
+  it('upserts one repeatable job per sync kind with retries', async () => {
     const queue = fakeQueue();
-    await createActivitySyncScheduler(queue as unknown as SchedulerQueue, EVERY_MS).schedule('u1');
+    await createIcuSyncScheduler(queue as unknown as SchedulerQueue, JOBS).schedule('u1');
 
+    expect(queue.upsertJobScheduler).toHaveBeenCalledTimes(2);
     expect(queue.upsertJobScheduler).toHaveBeenCalledWith(
       'icu-activity-sync:u1',
-      { every: EVERY_MS },
+      { every: ACTIVITY_EVERY_MS },
       expect.objectContaining({
         name: 'icu-activity-sync',
         data: { userId: 'u1' },
         opts: expect.objectContaining({ attempts: 3 }) as unknown,
       })
     );
+    expect(queue.upsertJobScheduler).toHaveBeenCalledWith(
+      'icu-wellness-sync:u1',
+      { every: WELLNESS_EVERY_MS },
+      expect.objectContaining({ name: 'icu-wellness-sync', data: { userId: 'u1' } })
+    );
   });
 
-  it('unschedule removes the athlete scheduler', async () => {
+  it('unschedule removes both athlete schedulers', async () => {
     const queue = fakeQueue();
-    await createActivitySyncScheduler(queue as unknown as SchedulerQueue, EVERY_MS).unschedule(
-      'u1'
-    );
-    expect(queue.removeJobScheduler).toHaveBeenCalledWith(activitySyncSchedulerId('u1'));
+    await createIcuSyncScheduler(queue as unknown as SchedulerQueue, JOBS).unschedule('u1');
+    expect(queue.removeJobScheduler.mock.calls).toEqual([
+      [syncSchedulerId('icu-activity-sync', 'u1')],
+      [syncSchedulerId('icu-wellness-sync', 'u1')],
+    ]);
   });
 });
 
 describe('reconcileSchedulers', () => {
   it('adds missing/stale schedulers and removes orphaned ones', async () => {
     const queue = fakeQueue([
-      { key: 'icu-activity-sync:kept', every: EVERY_MS },
+      ...current('kept'),
       { key: 'icu-activity-sync:stale', every: 60_000 },
-      { key: 'icu-activity-sync:gone', every: EVERY_MS },
-      { key: 'something-else', every: EVERY_MS },
+      { key: 'icu-wellness-sync:stale', every: WELLNESS_EVERY_MS },
+      // Linked before wellness sync existed: activity scheduler only
+      { key: 'icu-activity-sync:no-wellness', every: ACTIVITY_EVERY_MS },
+      ...current('gone'),
+      { key: 'icu-wellness-sync:gone-too', every: WELLNESS_EVERY_MS },
+      { key: 'something-else', every: ACTIVITY_EVERY_MS },
     ]);
     const scheduler = {
       schedule: vi.fn(() => Promise.resolve()),
@@ -60,12 +85,12 @@ describe('reconcileSchedulers', () => {
     const result = await reconcileSchedulers(
       queue as unknown as SchedulerQueue,
       scheduler,
-      ['kept', 'stale', 'new'],
-      EVERY_MS
+      ['kept', 'stale', 'no-wellness', 'new'],
+      JOBS
     );
 
-    expect(result).toEqual({ scheduled: 2, removed: 1 });
-    expect(scheduler.schedule.mock.calls).toEqual([['stale'], ['new']]);
-    expect(scheduler.unschedule.mock.calls).toEqual([['gone']]);
+    expect(result).toEqual({ scheduled: 3, removed: 2 });
+    expect(scheduler.schedule.mock.calls).toEqual([['stale'], ['no-wellness'], ['new']]);
+    expect(scheduler.unschedule.mock.calls).toEqual([['gone'], ['gone-too']]);
   });
 });

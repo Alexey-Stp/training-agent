@@ -1,9 +1,9 @@
 import { UnrecoverableError } from 'bullmq';
 import { decryptSecret, SecretDecryptError, Sport } from '@triathlon/core';
 import type { IcuSyncJob } from '@triathlon/core';
-import { IcuAuthError, IcuRateLimitError, IcuServerError } from '@triathlon/integrations-icu';
+import { IcuAuthError } from '@triathlon/integrations-icu';
 import type { Activity as IcuActivity, IcuClient } from '@triathlon/integrations-icu';
-import { MSG_NOT_CONNECTED, type IcuConnectionRecord } from './icu-connect';
+import type { IcuConnectionRecord } from './icu-connect';
 
 /** Local Activity row as written by the sync (DB-managed id/createdAt/updatedAt excluded). */
 export interface ActivityData {
@@ -62,11 +62,6 @@ export type SyncResult =
       oldest: string;
       newest: string;
     };
-
-export const MSG_SYNC_AUTH_FAILED =
-  '❌ intervals.icu rejected the stored API key. Run /connect icu to link your account again.';
-export const MSG_SYNC_UNAVAILABLE =
-  '⚠️ intervals.icu is not responding right now. Please try /sync again later. The automatic sync will keep retrying.';
 
 const SPORT_BY_ICU_TYPE: Record<string, Sport> = {
   Ride: Sport.bike,
@@ -208,36 +203,13 @@ export async function syncActivities(userId: string, deps: ActivitySyncDeps): Pr
   };
 }
 
-/** `/sync` command: runs a sync now and replies with a summary. */
-export async function handleSync(userId: string, deps: ActivitySyncDeps): Promise<string> {
-  let result: SyncResult;
-  try {
-    result = await syncActivities(userId, deps);
-  } catch (error) {
-    if (error instanceof IcuAuthError || error instanceof SecretDecryptError) {
-      return MSG_SYNC_AUTH_FAILED;
-    }
-    if (error instanceof IcuRateLimitError || error instanceof IcuServerError) {
-      return MSG_SYNC_UNAVAILABLE;
-    }
-    throw error;
-  }
-
-  if (result.status === 'not_connected') return MSG_NOT_CONNECTED;
-
-  return `✅ Synced intervals.icu activities: ${result.created} new, ${result.updated} updated, ${result.unchanged} unchanged (${result.oldest} → ${result.newest}).`;
-}
-
 /**
- * `icu-sync` queue processor. Transient errors are rethrown so BullMQ retries;
+ * `icu-sync` queue job runner. Transient errors are rethrown so BullMQ retries;
  * a rejected or unreadable API key won't fix itself, so it fails without retry.
  */
-export async function processSyncJob(
-  data: IcuSyncJob,
-  deps: ActivitySyncDeps
-): Promise<SyncResult> {
+export async function runIcuSyncJob<T>(sync: () => Promise<T>): Promise<T> {
   try {
-    return await syncActivities(data.userId, deps);
+    return await sync();
   } catch (error) {
     if (error instanceof IcuAuthError) {
       throw new UnrecoverableError('intervals.icu rejected the stored API key');
@@ -247,4 +219,9 @@ export async function processSyncJob(
     }
     throw error;
   }
+}
+
+/** `icu-activity-sync` job processor. */
+export function processSyncJob(data: IcuSyncJob, deps: ActivitySyncDeps): Promise<SyncResult> {
+  return runIcuSyncJob(() => syncActivities(data.userId, deps));
 }
