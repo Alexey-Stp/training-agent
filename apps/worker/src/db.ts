@@ -3,6 +3,11 @@ import { Sport } from '@triathlon/core';
 import { logger } from './logger';
 import type { IcuConnectionRepo } from './icu-connect';
 import type { ActivityRepo } from './activity-sync';
+import {
+  WELLNESS_DEVICE_FIELDS,
+  type WellnessDeviceField,
+  type WellnessRepo,
+} from './wellness-sync';
 
 export const prisma = new PrismaClient({
   log: [
@@ -72,6 +77,11 @@ export async function markMessageProcessed(userId: string, messageId: number): P
   });
 }
 
+/** Every wellness device field set to null: clears synced data, keeps check-ins. */
+const clearedWellnessDeviceFields = Object.fromEntries(
+  WELLNESS_DEVICE_FIELDS.map((field) => [field, null])
+) as Record<WellnessDeviceField, null>;
+
 export const icuConnectionRepo: IcuConnectionRepo = {
   async upsert(data, { resetSync }) {
     const { userId, ...fields } = data;
@@ -85,6 +95,10 @@ export const icuConnectionRepo: IcuConnectionRepo = {
       }),
       // Activities of a previously linked athlete don't belong to this link
       prisma.activity.deleteMany({ where: { userId, icuAthleteId: { not: data.icuAthleteId } } }),
+      // Neither does their device wellness. The athlete's own check-ins stay
+      ...(resetSync
+        ? [prisma.wellness.updateMany({ where: { userId }, data: clearedWellnessDeviceFields })]
+        : []),
     ]);
   },
 
@@ -147,5 +161,47 @@ export const activityRepo: ActivityRepo = {
   async listConnectedUserIds() {
     const rows = await prisma.icuConnection.findMany({ select: { userId: true } });
     return rows.map((row) => row.userId);
+  },
+};
+
+const wellnessDeviceSelect = {
+  userId: true,
+  date: true,
+  ...(Object.fromEntries(WELLNESS_DEVICE_FIELDS.map((field) => [field, true])) as Record<
+    WellnessDeviceField,
+    true
+  >),
+};
+
+export const wellnessRepo: WellnessRepo = {
+  findConnection(userId) {
+    return prisma.icuConnection.findUnique({ where: { userId } });
+  },
+
+  async findByDates(userId, dates) {
+    if (dates.length === 0) return [];
+    const rows = await prisma.wellness.findMany({
+      where: { userId, date: { in: dates } },
+      select: wellnessDeviceSelect,
+    });
+    return rows;
+  },
+
+  async applySync({ userId, upserts, cursor }) {
+    await prisma.$transaction(async (tx) => {
+      for (const row of upserts) {
+        // Built from the field list so nothing else can reach the subjective check-in columns
+        const deviceFields = Object.fromEntries(
+          WELLNESS_DEVICE_FIELDS.map((field) => [field, row[field]])
+        ) as Record<WellnessDeviceField, number | null>;
+        // Upsert, not createMany: a check-in may have created the day since findByDates
+        await tx.wellness.upsert({
+          where: { userId_date: { userId, date: row.date } },
+          create: { userId, date: row.date, ...deviceFields },
+          update: deviceFields,
+        });
+      }
+      await tx.icuConnection.update({ where: { userId }, data: { lastWellnessSyncAt: cursor } });
+    });
   },
 };

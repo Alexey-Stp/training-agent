@@ -19,6 +19,10 @@ const envSchema = z.object({
   ICU_ACTIVITY_SYNC_EVERY_MIN: z.coerce.number().int().positive().default(30),
   ICU_ACTIVITY_BACKFILL_DAYS: z.coerce.number().int().positive().default(90),
   ICU_ACTIVITY_SYNC_OVERLAP_DAYS: z.coerce.number().int().nonnegative().default(2),
+  // intervals.icu wellness sync (same queue, daily by default)
+  ICU_WELLNESS_SYNC_EVERY_MIN: z.coerce.number().int().positive().default(1440),
+  ICU_WELLNESS_BACKFILL_DAYS: z.coerce.number().int().positive().default(90),
+  ICU_WELLNESS_SYNC_OVERLAP_DAYS: z.coerce.number().int().nonnegative().default(3),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

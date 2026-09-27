@@ -10,18 +10,15 @@ import {
 } from '@triathlon/integrations-icu';
 import {
   computeWindow,
-  handleSync,
   mapIcuSport,
   processSyncJob,
   syncActivities,
-  MSG_SYNC_AUTH_FAILED,
-  MSG_SYNC_UNAVAILABLE,
   type ActivityData,
   type ActivityRepo,
   type ActivitySyncDeps,
   type ApplySyncInput,
 } from '../src/activity-sync';
-import { MSG_NOT_CONNECTED, type IcuConnectionRecord } from '../src/icu-connect';
+import type { IcuConnectionRecord } from '../src/icu-connect';
 import fixture from './fixtures/icu-activities-90d.json';
 
 const USER_ID = 'user-1';
@@ -319,34 +316,5 @@ describe('processSyncJob', () => {
   it('transient errors are rethrown for BullMQ retry', async () => {
     listActivities.mockRejectedValueOnce(new IcuServerError(502, 3));
     await expect(processSyncJob({ userId: USER_ID }, deps)).rejects.toBeInstanceOf(IcuServerError);
-  });
-});
-
-describe('handleSync', () => {
-  it('replies with a summary', async () => {
-    const reply = await handleSync(USER_ID, deps);
-    expect(reply).toContain('6 new, 0 updated, 0 unchanged');
-    expect(reply).toContain('2026-06-28 → 2026-09-27');
-  });
-
-  it('not connected', async () => {
-    repo.connection = null;
-    expect(await handleSync(USER_ID, deps)).toBe(MSG_NOT_CONNECTED);
-  });
-
-  it('rejected key', async () => {
-    listActivities.mockRejectedValueOnce(new IcuAuthError());
-    expect(await handleSync(USER_ID, deps)).toBe(MSG_SYNC_AUTH_FAILED);
-  });
-
-  it('ICU unavailable', async () => {
-    listActivities.mockRejectedValueOnce(new IcuServerError(503, 3));
-    expect(await handleSync(USER_ID, deps)).toBe(MSG_SYNC_UNAVAILABLE);
-    expect(repo.connection!.lastActivitySyncAt).toBeNull();
-  });
-
-  it('unexpected errors are rethrown', async () => {
-    listActivities.mockRejectedValueOnce(new Error('network down'));
-    await expect(handleSync(USER_ID, deps)).rejects.toThrow('network down');
   });
 });

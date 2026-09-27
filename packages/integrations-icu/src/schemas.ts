@@ -42,6 +42,14 @@ export type ActivityList = z.infer<typeof ActivityListSchema>;
 export const WellnessSchema = z
   .object({
     id: z.string(), // YYYY-MM-DD date key
+    // Device / ICU-derived metrics. Any of them may be missing (no strap, no scale, ...)
+    ctl: z.number().nullish(),
+    atl: z.number().nullish(),
+    restingHR: z.number().nullish(),
+    hrv: z.number().nullish(), // rMSSD, ms
+    sleepSecs: z.number().nullish(),
+    sleepScore: z.number().nullish(),
+    weight: z.number().nullish(), // kg
   })
   .passthrough();
 

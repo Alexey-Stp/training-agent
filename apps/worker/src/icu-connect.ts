@@ -8,7 +8,7 @@ import {
   IcuServerError,
 } from '@triathlon/integrations-icu';
 import type { IcuClient } from '@triathlon/integrations-icu';
-import type { ActivitySyncScheduler } from './sync-scheduler';
+import type { IcuSyncScheduler } from './sync-scheduler';
 
 export interface IcuConnectionRecord {
   userId: string;
@@ -32,7 +32,8 @@ export interface IcuConnectionRepo {
   /**
    * One connection per user: re-linking overwrites the previous credentials and
    * removes the user's activities synced from any other athlete. `resetSync`
-   * clears the sync cursors so the new athlete gets a full backfill.
+   * clears the sync cursors and the synced wellness device fields (check-ins are
+   * kept) so the new athlete gets a full backfill.
    */
   upsert(data: IcuConnectionUpsert, opts: { resetSync: boolean }): Promise<void>;
   findByUserId(userId: string): Promise<IcuConnectionRecord | null>;
@@ -45,8 +46,8 @@ export interface IcuConnectDeps {
   /** Decryption keyring: current key first, then previous (see core getEncKeys). */
   keys: Buffer[];
   createClient(athleteId: string, apiKey: string): Pick<IcuClient, 'getAthlete'>;
-  /** Repeatable activity sync. Failures are reported via onSchedulerError; worker startup reconciles. */
-  scheduler?: ActivitySyncScheduler;
+  /** Repeatable activity + wellness sync. Failures are reported via onSchedulerError; worker startup reconciles. */
+  scheduler?: IcuSyncScheduler;
   onSchedulerError?(error: unknown, userId: string): void;
 }
 
@@ -121,7 +122,7 @@ export async function handleConnectIcu(
   );
   await runScheduler(deps, userId, 'schedule');
 
-  return `✅ Connected to intervals.icu as ${athleteName} (${creds.athleteId}).\n\nYour recent activities are syncing now and will refresh automatically (or run /sync).\nUse /connect status to check the link or /disconnect icu to remove it.`;
+  return `✅ Connected to intervals.icu as ${athleteName} (${creds.athleteId}).\n\nYour recent activities and wellness are syncing now and will refresh automatically (or run /sync).\nUse /connect status to check the link or /disconnect icu to remove it.`;
 }
 
 function formatSyncTime(date: Date | null): string {

@@ -91,9 +91,11 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 - `index.ts` - BullMQ worker setup and job processing
 - `handlers.ts` - Command handler implementations
 - `icu-connect.ts` - `connect_icu` / `/connect status` / `/disconnect icu` handlers (injected repo + ICU client for testing)
-- `activity-sync.ts` - ICU activity sync: window, mapping, idempotent diff, `/sync` handler, `icu-sync` job processor (injected deps)
-- `sync-scheduler.ts` - per-athlete BullMQ job schedulers on the `icu-sync` queue, startup reconciliation
-- `db.ts` - Database utilities (user creation, deduplication, `icuConnectionRepo`, `activityRepo`)
+- `activity-sync.ts` - ICU activity sync: window, mapping, idempotent diff, `icu-activity-sync` job processor, shared `runIcuSyncJob` error mapping (injected deps)
+- `wellness-sync.ts` - ICU wellness sync: mapping, device-only merge, `icu-wellness-sync` job processor (injected deps)
+- `sync-command.ts` - `/sync` handler (activities, then wellness)
+- `sync-scheduler.ts` - per-athlete BullMQ job schedulers (activity + wellness) on the `icu-sync` queue, startup reconciliation
+- `db.ts` - Database utilities (user creation, deduplication, `icuConnectionRepo`, `activityRepo`, `wellnessRepo`)
 
 **Design Principles**:
 
@@ -163,7 +165,7 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 
 1. **User** - Telegram user mapping
    - `telegramId` (unique, BigInt)
-   - Relations: Profile, Workouts, Fatigue
+   - Relations: Profile, Workouts, Wellness
 
 2. **Profile** - User training preferences
    - FTP, timezone, swim days, bike days
@@ -173,9 +175,10 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
    - Sport, duration, intensity, date
    - Indexed on (userId, date) for fast queries
 
-4. **Fatigue** - Daily readiness/sleep data
-   - Readiness (1-5), sleep score
-   - Unique on (userId, date)
+4. **Wellness** - Daily readiness input (replaced `Fatigue` in `3_wellness`)
+   - Device/ICU columns written by the wellness sync: `hrv` (rMSSD), `restingHr`, `sleepHours`, `sleepScore`, `weightKg`, `ctl`, `atl`, `tsb` (= ctl − atl)
+   - Check-in columns never written by sync: `subjectiveReadiness` (1-5), `soreness`
+   - Unique on (userId, date), date is `yyyy-MM-dd` athlete-local
 
 5. **ProcessedMessage** - Idempotency tracking
    - Prevents duplicate workout logs
@@ -183,15 +186,15 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 
 6. **IcuConnection** - intervals.icu account link
    - `icuAthleteId`, `icuAthleteName`, `apiKeyCiphertext` (base64 ciphertext‖GCM tag), `apiKeyIv`
-   - `lastActivitySyncAt` (activity sync cursor), `lastWellnessSyncAt` (set by the future wellness sync)
-   - Unique on userId: one connection per user, re-linking overwrites. Re-linking a different athlete resets both sync cursors and deletes the user's activities from the old athlete
+   - `lastActivitySyncAt` (activity sync cursor), `lastWellnessSyncAt` (wellness sync cursor)
+   - Unique on userId: one connection per user, re-linking overwrites. Re-linking a different athlete resets both sync cursors, deletes the user's activities from the old athlete and clears the Wellness device columns (check-ins are kept)
 
 7. **Activity** - executed training pulled from intervals.icu
    - `icuId` + `userId` (unique together, so two users may link the same athlete), `icuAthleteId`, `sport` (`other` for unmapped ICU types), raw `icuType`, `name`
    - `startTime` (UTC), `startDateLocal` (`yyyy-MM-dd`), `durationSec`, `distanceM`, `load` (`icu_training_load`), `avgHr`, `avgPower`, `source`
    - Indexed on (userId, startTime)
 
-**Migrations**: `prisma/migrations/` starts with `0_init` (baseline of the pre-TA-9 schema), followed by `1_icu_connection` and `2_activity`. Apply with `npm run db:deploy`. A database created earlier with `db push` must be baselined once: `npx prisma migrate resolve --applied 0_init`, then `npm run db:deploy`.
+**Migrations**: `prisma/migrations/` starts with `0_init` (baseline of the pre-TA-9 schema), followed by `1_icu_connection`, `2_activity` and `3_wellness` (creates `Wellness`, copies `Fatigue.readiness` → `subjectiveReadiness` and `Fatigue.sleepScore` → `sleepScore`, then drops `Fatigue`, all in one transaction). Apply with `npm run db:deploy`. A database created earlier with `db push` must be baselined once: `npx prisma migrate resolve --applied 0_init`, then `npm run db:deploy`.
 
 **Indices**: Optimized for common queries (last 7 days workouts, user lookup)
 
@@ -217,11 +220,13 @@ The dialog runs in the bot so the plaintext key never reaches the BullMQ payload
 
 ```
 connect_icu ok    → scheduler.upsertJobScheduler('icu-activity-sync:<userId>', every 30 min)
-                    (first job runs immediately = 90-day backfill)
-/disconnect icu   → removeJobScheduler
+                    scheduler.upsertJobScheduler('icu-wellness-sync:<userId>', every 24 h)
+                    (first jobs run immediately = 90-day backfills)
+/disconnect icu   → removeJobScheduler (both)
 worker startup    → reconcileSchedulers: add missing/stale schedulers, remove ones without a connection
 icu-activity-sync → syncActivities(userId)
-/sync             → syncActivities(userId) inline in the commands worker, reply with counts
+icu-wellness-sync → syncWellness(userId)
+/sync             → syncActivities, then syncWellness, inline in the commands worker, reply with counts
 ```
 
 `syncActivities` does the following:
@@ -238,6 +243,8 @@ Failures:
 - A rejected (401) or undecryptable key throws `UnrecoverableError`, so there is no retry.
 - `/sync` answers ICU errors with a friendly reply instead.
 
+`syncWellness` follows the same steps with `lastWellnessSyncAt`, `ICU_WELLNESS_BACKFILL_DAYS` and `ICU_WELLNESS_SYNC_OVERLAP_DAYS`, keyed by date instead of `icuId`. The difference is the merge: each new or changed day is a `wellness.upsert` whose `update` holds only the device columns (`WELLNESS_DEVICE_FIELDS`). ICU values overwrite, nulls included, and `subjectiveReadiness`/`soreness` are never written. Upsert (not `createMany`) keeps a check-in that created the row mid-sync.
+
 ### Example: `/plan` Command
 
 1. **User sends** `/plan` in Telegram
@@ -250,7 +257,7 @@ Failures:
 8. **Worker checks** if message already processed (idempotency)
 9. **Worker fetches** user profile from DB
 10. **Worker generates** draft plan (template-based)
-11. **Worker fetches** last 7 days workouts + today's fatigue
+11. **Worker fetches** last 7 days workouts + today's Wellness row
 12. **Worker applies rules** (NoHardHard, ReadinessDownshift, WeeklyLoadCap, SwimRotation)
 13. **Worker formats** response message
 14. **Worker sends** via Telegram API
@@ -277,7 +284,7 @@ Draft Plan (template) → Rules Engine → Final Plan
                             ↓
                     Rules Context
                     - Last 7d stats
-                    - Today's fatigue
+                    - Today's wellness
 ```
 
 ### Rules Execution Order
