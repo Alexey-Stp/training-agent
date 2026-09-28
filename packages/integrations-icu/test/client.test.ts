@@ -11,6 +11,7 @@ import athleteFixture from './fixtures/athlete.json';
 import activitiesFixture from './fixtures/activities.json';
 import wellnessFixture from './fixtures/wellness.json';
 import eventsFixture from './fixtures/events.json';
+import workoutEventFixture from './fixtures/workout-event.json';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -164,6 +165,61 @@ describe('IcuClient.createEvent', () => {
     expect(url).toContain('/events');
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body as string)).toMatchObject(input);
+  });
+});
+
+describe('IcuClient.createEvent (workout)', () => {
+  it('sends category, moving_time and external_id and parses the workout event', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse(workoutEventFixture));
+    const client = new IcuClient({ ...BASE_CONFIG, fetch: mockFetch });
+
+    const input = {
+      category: 'WORKOUT',
+      start_date_local: '2026-09-29T00:00:00',
+      name: 'Run Intervals',
+      type: 'Run',
+      description: workoutEventFixture.description,
+      moving_time: 3300,
+      external_id: 'ta-p1',
+    };
+    const result = await client.createEvent(input);
+
+    expect(result).toMatchObject({
+      id: 2001,
+      category: 'WORKOUT',
+      type: 'Run',
+      external_id: 'ta-p1',
+      moving_time: 3300,
+    });
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual(input);
+  });
+});
+
+// ── getEvent ──────────────────────────────────────────────────────────────────
+
+describe('IcuClient.getEvent', () => {
+  it('happy path: returns the event by id', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse(workoutEventFixture));
+    const client = new IcuClient({ ...BASE_CONFIG, fetch: mockFetch });
+
+    const result = await client.getEvent(2001);
+
+    expect(result.id).toBe(2001);
+    expect(result.description).toBe(workoutEventFixture.description);
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://intervals.icu/api/v1/athlete/i12345/events/2001');
+    expect(init.method).toBeUndefined();
+  });
+
+  it('404: throws IcuHttpError with status 404 and no retry', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse({ error: 'Not found' }, 404));
+    const client = new IcuClient({ ...BASE_CONFIG, fetch: mockFetch });
+
+    const error: unknown = await client.getEvent(9999).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(IcuHttpError);
+    expect((error as IcuHttpError).status).toBe(404);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });
 

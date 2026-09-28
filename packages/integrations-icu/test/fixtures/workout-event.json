@@ -1,0 +1,12 @@
+{
+  "id": 2001,
+  "start_date_local": "2026-09-29T00:00:00",
+  "name": "Run Intervals",
+  "category": "WORKOUT",
+  "type": "Run",
+  "description": "Warmup\n- 15m Z2 HR\n\nMain set 5x\n- 3m Z4 HR\n- 2m Z1 HR\n\nCooldown\n- 15m Z1 HR",
+  "moving_time": 3300,
+  "external_id": "ta-p1",
+  "workout_doc": { "steps": [] },
+  "icu_training_load": 62
+}

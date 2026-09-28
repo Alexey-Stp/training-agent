@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
+  PLAN_RECONCILE_JOB,
   createIcuSyncScheduler,
   reconcileSchedulers,
   syncSchedulerId,
@@ -92,5 +93,32 @@ describe('reconcileSchedulers', () => {
     expect(result).toEqual({ scheduled: 3, removed: 2 });
     expect(scheduler.schedule.mock.calls).toEqual([['stale'], ['no-wellness'], ['new']]);
     expect(scheduler.unschedule.mock.calls).toEqual([['gone'], ['gone-too']]);
+  });
+
+  it('schedules the plan reconcile job for athletes linked before it existed', async () => {
+    const PLAN_EVERY_MS = 60 * 60_000;
+    const jobs: IcuSyncJobSpec[] = [...JOBS, { job: PLAN_RECONCILE_JOB, everyMs: PLAN_EVERY_MS }];
+    const queue = fakeQueue([
+      ...current('old'),
+      ...current('up-to-date'),
+      { key: 'icu-plan-reconcile:up-to-date', every: PLAN_EVERY_MS },
+      { key: 'icu-plan-reconcile:gone', every: PLAN_EVERY_MS },
+    ]);
+    const scheduler = createIcuSyncScheduler(queue as unknown as SchedulerQueue, jobs);
+
+    const result = await reconcileSchedulers(
+      queue as unknown as SchedulerQueue,
+      scheduler,
+      ['old', 'up-to-date'],
+      jobs
+    );
+
+    expect(result).toEqual({ scheduled: 1, removed: 1 });
+    expect(queue.upsertJobScheduler).toHaveBeenCalledWith(
+      'icu-plan-reconcile:old',
+      { every: PLAN_EVERY_MS },
+      expect.objectContaining({ name: 'icu-plan-reconcile', data: { userId: 'old' } })
+    );
+    expect(queue.removeJobScheduler).toHaveBeenCalledWith('icu-plan-reconcile:gone');
   });
 });

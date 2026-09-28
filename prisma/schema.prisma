@@ -16,6 +16,7 @@ model User {
   processedMessages ProcessedMessage[]
   icuConnection     IcuConnection?
   activities        Activity[]
+  plannedSessions   PlannedSession[]
 
   @@index([telegramId])
 }
@@ -139,4 +140,38 @@ model Activity {
 
   @@unique([userId, icuId])
   @@index([userId, startTime])
+}
+
+enum PlannedSessionStatus {
+  draft               // local changes not yet in intervals.icu
+  pushed              // intervals.icu event matches the local session
+  modified_externally // athlete moved/edited/deleted the event in intervals.icu; their version wins
+  completed
+  skipped
+}
+
+// Planned workout, pushed to the intervals.icu calendar (see apps/worker/src/plan-push.ts)
+model PlannedSession {
+  id             String               @id @default(cuid())
+  userId         String
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date           String               // YYYY-MM-DD in the athlete's local time
+  slot           String               // "<sport>-<n>": nth session of that sport on the date
+  sport          Sport
+  title          String
+  description    String?              // coach notes
+  durationMin    Int
+  intensity      Intensity
+  steps          Json                 // WorkoutBlock[] (core workout.ts)
+  status         PlannedSessionStatus @default(draft)
+  icuEventId     Int?
+  pushedHash     String?              // hash of the ICU event as returned by our last write
+  pushedAt       DateTime?
+  externalChange String?              // why reconcile flagged it, e.g. "moved to 2026-10-02"
+  deletedAt      DateTime?            // local tombstone: push deletes the ICU event, then the row
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@unique([userId, date, slot])
+  @@index([userId, status])
 }

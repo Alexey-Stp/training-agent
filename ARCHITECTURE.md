@@ -94,8 +94,12 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 - `activity-sync.ts` - ICU activity sync: window, mapping, idempotent diff, `icu-activity-sync` job processor, shared `runIcuSyncJob` error mapping (injected deps)
 - `wellness-sync.ts` - ICU wellness sync: mapping, device-only merge, `icu-wellness-sync` job processor (injected deps)
 - `sync-command.ts` - `/sync` handler (activities, then wellness)
-- `sync-scheduler.ts` - per-athlete BullMQ job schedulers (activity + wellness) on the `icu-sync` queue, startup reconciliation
-- `db.ts` - Database utilities (user creation, deduplication, `icuConnectionRepo`, `activityRepo`, `wellnessRepo`)
+- `sync-scheduler.ts` - per-athlete BullMQ job schedulers (activity, wellness, plan reconcile) on the `icu-sync` queue, startup reconciliation
+- `plan-store.ts` - stores the generated week as `PlannedSession` rows: `diffPlan` on (date, slot), tombstones for pushed sessions that leave the plan
+- `plan-push.ts` - `IcuEventPusher`: creates/updates/deletes ICU `WORKOUT` events for pending sessions, `external_id` orphan adoption, `hashIcuEvent` (injected deps)
+- `plan-reconcile.ts` - `icu-plan-reconcile` job processor: flags sessions whose ICU event was moved/edited/deleted as `modified_externally` (injected deps)
+- `plan-command.ts` - `/plan push` handler (store, push, reply)
+- `db.ts` - Database utilities (user creation, deduplication, `icuConnectionRepo`, `activityRepo`, `wellnessRepo`, `plannedSessionRepo`)
 
 **Design Principles**:
 
@@ -117,6 +121,8 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 - `crypto.ts` - AES-256-GCM `encryptSecret` / `decryptSecret` (rotation-ready keyring), `maskSecret`
 - `logger.ts` - `createLogger()` shared pino setup with `LOG_REDACT_PATHS`
 - `plan-generator.ts` - Draft plan generation from template
+- `workout.ts` - `buildWorkoutSteps` (warmup / main set or N x (work, rest) / cooldown from sport, intensity and duration) and `renderIcuWorkout` (intervals.icu workout text)
+- `planned-session.ts` - `toPlannedSessions`: adapter from the rules-applied `WeekPlan` to `PlannedSession` rows
 - `rules-engine.ts` - Plan validation and adjustments
 
 **Design Principles**:
@@ -194,7 +200,12 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
    - `startTime` (UTC), `startDateLocal` (`yyyy-MM-dd`), `durationSec`, `distanceM`, `load` (`icu_training_load`), `avgHr`, `avgPower`, `source`
    - Indexed on (userId, startTime)
 
-**Migrations**: `prisma/migrations/` starts with `0_init` (baseline of the pre-TA-9 schema), followed by `1_icu_connection`, `2_activity` and `3_wellness` (creates `Wellness`, copies `Fatigue.readiness` → `subjectiveReadiness` and `Fatigue.sleepScore` → `sleepScore`, then drops `Fatigue`, all in one transaction). Apply with `npm run db:deploy`. A database created earlier with `db push` must be baselined once: `npx prisma migrate resolve --applied 0_init`, then `npm run db:deploy`.
+8. **PlannedSession** - planned workout pushed to the intervals.icu calendar
+   - `date`, `slot` (`<sport>-<n>`, unique with userId and date), `sport`, `title`, `description` (coach notes), `durationMin`, `intensity`, `steps` (JSON `WorkoutBlock[]`)
+   - `status`: `draft` | `pushed` | `modified_externally` | `completed` | `skipped`
+   - `icuEventId`, `pushedHash` (hash of the event ICU returned after our last write), `pushedAt`, `externalChange` (reason for the flag), `deletedAt` (tombstone until push deletes the ICU event)
+
+**Migrations**: `prisma/migrations/` starts with `0_init` (baseline of the pre-TA-9 schema), followed by `1_icu_connection`, `2_activity`, `3_wellness` (creates `Wellness`, copies `Fatigue.readiness` → `subjectiveReadiness` and `Fatigue.sleepScore` → `sleepScore`, then drops `Fatigue`, all in one transaction) and `4_planned_session`. Apply with `npm run db:deploy`. A database created earlier with `db push` must be baselined once: `npx prisma migrate resolve --applied 0_init`, then `npm run db:deploy`.
 
 **Indices**: Optimized for common queries (last 7 days workouts, user lookup)
 
@@ -244,6 +255,21 @@ Failures:
 - `/sync` answers ICU errors with a friendly reply instead.
 
 `syncWellness` follows the same steps with `lastWellnessSyncAt`, `ICU_WELLNESS_BACKFILL_DAYS` and `ICU_WELLNESS_SYNC_OVERLAP_DAYS`, keyed by date instead of `icuId`. The difference is the merge: each new or changed day is a `wellness.upsert` whose `update` holds only the device columns (`WELLNESS_DEVICE_FIELDS`). ICU values overwrite, nulls included, and `subjectiveReadiness`/`soreness` are never written. Upsert (not `createMany`) keeps a check-in that created the row mid-sync.
+
+### Planned workout push (`/plan push`, `icu-plan-reconcile`)
+
+```
+/plan, /plan push   → generateDraftPlan → applyRules → toPlannedSessions → materializePlan(today..today+6)
+/plan push          → pushPlannedSessions(today): tombstones → deleteEvent, drafts → createEvent / updateEvent
+connect_icu ok      → scheduler.upsertJobScheduler('icu-plan-reconcile:<userId>', every 60 min)
+icu-plan-reconcile  → reconcilePlannedSessions(userId)
+```
+
+`materializePlan` matches rows on (date, slot). New sessions are created as `draft`. A changed `draft`/`pushed` row gets the new content and goes back to `draft`, keeping its `icuEventId`. Rows that left the plan are tombstoned (`deletedAt`) if they have an ICU event, and deleted otherwise. `modified_externally`, `completed` and `skipped` rows are never touched, and rows before today are history.
+
+`pushPlannedSessions` loads the pending rows (tombstoned or `draft`, dated today or later). Before creating anything, it lists the ICU events in that range and adopts events whose `external_id` (`ta-<id>`) matches a row without an `icuEventId`. This covers a crash between `createEvent` and the DB write. Each row is saved right after its ICU call: `pushedHash = hashIcuEvent(<event ICU returned>)`, so ICU normalization cannot cause false flags. `markPushed` only sets `pushed` if the row has not changed since it was read. A 404 on delete counts as deleted. A 404 on update means the athlete deleted the event, so the row is flagged.
+
+`reconcilePlannedSessions` loads the `pushed` rows dated from UTC yesterday on, lists the ICU events in their range, and fetches each missing one with `getEvent` (moved out of range, or 404 = deleted). A hash mismatch flags the row `modified_externally` with the reason `moved to <date>`, `edited in intervals.icu` or `deleted in intervals.icu`. The flag is a conditional update on the expected `pushedHash`, so a push that rewrote the event meanwhile wins. `listModifiedExternally` is the query for the daily brief.
 
 ### Example: `/plan` Command
 

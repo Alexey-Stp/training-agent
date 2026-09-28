@@ -65,6 +65,11 @@ export const EventSchema = z
     id: z.number(),
     start_date_local: z.string(),
     name: z.string(),
+    category: z.string().nullish(), // WORKOUT, RACE_A, NOTE, ...
+    type: z.string().nullish(), // sport for workouts, e.g. Ride, Run, Swim
+    description: z.string().nullish(), // for workouts: notes + structured workout text
+    moving_time: z.number().nullish(), // planned seconds
+    external_id: z.string().nullish(), // caller-provided id, used to find our own events
   })
   .passthrough();
 
@@ -79,8 +84,11 @@ export const CreateEventInputSchema = z.object({
   start_date_local: z.string(),
   name: z.string(),
   end_date_local: z.string().optional(),
+  category: z.string().optional(),
   type: z.string().optional(),
   description: z.string().optional(),
+  moving_time: z.number().optional(),
+  external_id: z.string().optional(),
 });
 
 export type CreateEventInput = z.infer<typeof CreateEventInputSchema>;

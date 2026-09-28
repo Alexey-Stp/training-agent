@@ -156,6 +156,14 @@ export class IcuClient {
     return this.parseResponse(response, EventListSchema, endpoint);
   }
 
+  /** GET /athlete/:id/events/:eventId. A missing event throws IcuHttpError with status 404. */
+  async getEvent(eventId: number): Promise<IcuEvent> {
+    const endpoint = 'GET /athlete/:id/events/:id';
+    const url = `${ICU_BASE_URL}/athlete/${this.athleteId}/events/${eventId.toString()}`;
+    const response = await this.executeWithRetry(url, endpoint);
+    return this.parseResponse(response, EventSchema, endpoint);
+  }
+
   /** POST /athlete/:id/events */
   async createEvent(data: CreateEventInput): Promise<IcuEvent> {
     const endpoint = 'POST /athlete/:id/events';
