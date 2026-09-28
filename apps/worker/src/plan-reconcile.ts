@@ -58,7 +58,7 @@ export async function reconcilePlannedSessions(
   const apiKey = decryptSecret({ ciphertext: conn.apiKeyCiphertext, iv: conn.apiKeyIv }, deps.keys);
   const client = deps.createClient(conn.icuAthleteId, apiKey);
 
-  const dates = rows.map((row) => row.date).sort();
+  const dates = rows.map((row) => row.date).sort((a, b) => a.localeCompare(b));
   const events = await client.listEvents(dates[0], dates[dates.length - 1]);
   const byId = new Map(events.map((e) => [e.id, e]));
 

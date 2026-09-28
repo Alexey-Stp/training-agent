@@ -200,7 +200,7 @@ async function adoptOrphanEvents(
   const unlinked = writes.filter((row) => row.icuEventId === null);
   if (unlinked.length === 0) return adopted;
 
-  const dates = unlinked.map((row) => row.date).sort();
+  const dates = unlinked.map((row) => row.date).sort((a, b) => a.localeCompare(b));
   const events = await client.listEvents(dates[0], dates[dates.length - 1]);
   const byExternalId = new Map(
     events.filter((e) => e.external_id).map((e) => [e.external_id as string, e.id])

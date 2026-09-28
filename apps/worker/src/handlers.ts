@@ -164,7 +164,7 @@ export async function handlePlan(user: UserWithProfile, store: PlanStoreDeps): P
   });
 
   // Sort dates
-  const sortedDates = Array.from(sessionsByDate.keys()).sort();
+  const sortedDates = Array.from(sessionsByDate.keys()).sort((a, b) => a.localeCompare(b));
 
   sortedDates.forEach((date) => {
     const sessions = sessionsByDate.get(date)!;
