@@ -13,12 +13,14 @@ import {
   icuConnectionRepo,
   activityRepo,
   wellnessRepo,
+  plannedSessionRepo,
 } from './db';
 import {
   handleStart,
   handleProfile,
   handleSetFtp,
   handlePlan,
+  handlePlanPushCommand,
   handleLog,
   handleUnknown,
 } from './handlers';
@@ -31,9 +33,13 @@ import {
 import { processSyncJob, type ActivitySyncDeps } from './activity-sync';
 import { processWellnessSyncJob, type WellnessSyncDeps } from './wellness-sync';
 import { handleSync, type SyncCommandDeps } from './sync-command';
+import type { PlanPushCommandDeps } from './plan-command';
+import type { PlanStoreDeps } from './plan-store';
+import { processPlanReconcileJob, type PlanReconcileDeps } from './plan-reconcile';
 import {
   ACTIVITY_SYNC_JOB,
   ICU_SYNC_QUEUE,
+  PLAN_RECONCILE_JOB,
   WELLNESS_SYNC_JOB,
   createIcuSyncScheduler,
   reconcileSchedulers,
@@ -52,11 +58,12 @@ const redisConnection = {
 };
 const encKeys = getEncKeys(config);
 
-// intervals.icu sync: per linked athlete, one repeatable activity job and one wellness job
-// on the icu-sync queue
+// intervals.icu sync: per linked athlete, one repeatable activity job, one wellness job and
+// one planned-workout reconcile job on the icu-sync queue
 const syncJobs: IcuSyncJobSpec[] = [
   { job: ACTIVITY_SYNC_JOB, everyMs: config.ICU_ACTIVITY_SYNC_EVERY_MIN * 60_000 },
   { job: WELLNESS_SYNC_JOB, everyMs: config.ICU_WELLNESS_SYNC_EVERY_MIN * 60_000 },
+  { job: PLAN_RECONCILE_JOB, everyMs: config.ICU_PLAN_RECONCILE_EVERY_MIN * 60_000 },
 ];
 const syncQueue = new Queue<IcuSyncJob>(ICU_SYNC_QUEUE, { connection: redisConnection });
 const icuSyncScheduler = createIcuSyncScheduler(syncQueue, syncJobs);
@@ -80,6 +87,25 @@ const wellnessSyncDeps: WellnessSyncDeps = {
 };
 
 const syncCommandDeps: SyncCommandDeps = { activity: activitySyncDeps, wellness: wellnessSyncDeps };
+
+const planStoreDeps: PlanStoreDeps = { repo: plannedSessionRepo, now: () => new Date() };
+
+const planPushCommandDeps: PlanPushCommandDeps = {
+  store: planStoreDeps,
+  push: {
+    repo: plannedSessionRepo,
+    keys: encKeys,
+    createClient: (athleteId, apiKey) => new IcuClient({ athleteId, apiKey }),
+    now: () => new Date(),
+  },
+};
+
+const planReconcileDeps: PlanReconcileDeps = {
+  repo: plannedSessionRepo,
+  keys: encKeys,
+  createClient: (athleteId, apiKey) => new IcuClient({ athleteId, apiKey }),
+  now: () => new Date(),
+};
 
 const icuConnectDeps: IcuConnectDeps = {
   repo: icuConnectionRepo,
@@ -143,7 +169,10 @@ const worker = new Worker<CommandJob>(
           break;
 
         case 'plan':
-          response = await handlePlan(user);
+          response =
+            args[0]?.toLowerCase() === 'push'
+              ? await handlePlanPushCommand(user, planPushCommandDeps)
+              : await handlePlan(user, planStoreDeps);
           break;
 
         case 'log':
@@ -270,10 +299,17 @@ worker.on('error', (err) => {
 const syncWorker = new Worker<IcuSyncJob>(
   ICU_SYNC_QUEUE,
   async (job: Job<IcuSyncJob>) => {
-    const result =
-      job.name === WELLNESS_SYNC_JOB
-        ? await processWellnessSyncJob(job.data, wellnessSyncDeps)
-        : await processSyncJob(job.data, activitySyncDeps);
+    let result;
+    switch (job.name) {
+      case WELLNESS_SYNC_JOB:
+        result = await processWellnessSyncJob(job.data, wellnessSyncDeps);
+        break;
+      case PLAN_RECONCILE_JOB:
+        result = await processPlanReconcileJob(job.data, planReconcileDeps);
+        break;
+      default:
+        result = await processSyncJob(job.data, activitySyncDeps);
+    }
     logger.info(
       { jobId: job.id, job: job.name, userId: job.data.userId, ...result },
       'intervals.icu sync finished'

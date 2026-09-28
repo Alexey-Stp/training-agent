@@ -25,6 +25,8 @@
     "@typescript-eslint/explicit-module-boundary-types": "off",
     "@typescript-eslint/no-floating-promises": "error",
     "@typescript-eslint/no-misused-promises": "error",
+    "@typescript-eslint/prefer-optional-chain": "error",
+    "@typescript-eslint/require-array-sort-compare": ["error", { "ignoreStringArrays": false }],
     "no-console": ["warn", { "allow": ["warn", "error"] }]
   },
   "ignorePatterns": ["dist", "node_modules", "*.js", "*.d.ts", "**/*.test.ts", "**/test/**"]

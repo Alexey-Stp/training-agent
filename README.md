@@ -114,7 +114,8 @@ See [CI_CD.md](CI_CD.md) for complete CI/CD documentation.
 - `/start` - Welcome message and help
 - `/profile` - View current training profile
 - `/set ftp <number>` - Update FTP (e.g., `/set ftp 280`)
-- `/plan` - Generate 7-day training plan with rules applied
+- `/plan` - Generate 7-day training plan with rules applied (saved, shows each session's intervals.icu status)
+- `/plan push` - Put the 7-day plan on your intervals.icu calendar as structured workouts (they sync to Garmin)
 - `/log <sport> <minutes> [intensity]` - Log completed workout
 - `/connect icu` - Link your intervals.icu account (asks for athlete ID, then API key)
 - `/connect status` - Show the linked athlete, masked API key and last sync times
@@ -176,12 +177,35 @@ The worker also pulls daily wellness into the `Wellness` table, one row per athl
 - Merge rule: sync overwrites the device/ICU columns, nulls included (a night without the HRV strap stores `hrv = null`). It never writes the athlete's check-in columns (`subjectiveReadiness`, `soreness`), and it ignores ICU's own subjective fields.
 - Re-linking a different athlete clears the synced device columns and keeps the check-ins.
 
+### Planned workout push
+
+`/plan` and `/plan push` store the generated week as `PlannedSession` rows (today to today + 6, rest days skipped). `/plan push` then writes them to the intervals.icu calendar as `WORKOUT` events:
+
+- **Create / update / delete.** A new session creates an event and stores its `icuEventId`. A session that changes locally (for example a readiness downgrade) updates the same event. A session that drops out of the plan has its event deleted. Pushing twice changes nothing.
+- **No duplicates.** Each event carries `external_id = ta-<sessionId>`. If the worker crashes after creating an event but before saving its id, the next push finds the event by `external_id` and updates it.
+- **Workout text.** The description holds the coach notes and the steps in intervals.icu workout syntax, which ICU turns into a structured workout for the watch. Bike steps use power zones, run steps use HR zones (`Z4 HR`), and swim steps use pace zones (`Z4 Pace`):
+
+  ```
+  Warmup
+  - 15m Z2 HR
+
+  Main set 5x
+  - 3m Z4 HR
+  - 2m Z1 HR
+
+  Cooldown
+  - 15m Z1 HR
+  ```
+
+- **External edits.** A repeatable `icu-plan-reconcile` job per linked athlete (every 60 minutes, `ICU_PLAN_RECONCILE_EVERY_MIN`) compares a content hash (date, name, sport, description) of each upcoming pushed event with the hash stored at push time. If the athlete moved, edited or deleted the event in intervals.icu, the session is flagged `modified_externally` with the reason (for example "moved to 2026-10-02"). Flagged sessions are never overwritten by `/plan` or `/plan push`. They are shown in `/plan` and in the `/plan push` reply.
+- **Statuses.** `draft` (local changes not pushed yet), `pushed`, `modified_externally`, and `completed` / `skipped`, which are reserved for activity matching.
+
 Set `SECRETS_ENC_KEY` in `.env` (base64 of 32 bytes: `openssl rand -base64 32`). Both bot and worker need it. To rotate, move the old key to `SECRETS_ENC_KEY_PREVIOUS` and set a new `SECRETS_ENC_KEY`.
 
 ### Client
 
 - **Auth**: HTTP Basic, username `API_KEY`, password = athlete API key. Per-athlete credentials come from `/connect icu`. `ICU_ATHLETE_ID` / `ICU_API_KEY` in `.env` are only for local experiments.
-- **Methods**: `getAthlete`, `listActivities(oldest, newest)`, `listWellness(oldest, newest)`, `listEvents(oldest?, newest?)`, `createEvent`, `updateEvent`, `deleteEvent`.
+- **Methods**: `getAthlete`, `listActivities(oldest, newest)`, `listWellness(oldest, newest)`, `listEvents(oldest?, newest?)`, `getEvent(id)`, `createEvent`, `updateEvent`, `deleteEvent`.
 - **Resilience**: exponential backoff, up to 3 retries on 429/5xx. Responses are validated with Zod, and unknown fields are allowed.
 - **Errors**: `IcuAuthError` (401, no retry), `IcuRateLimitError` (429 after retries), `IcuServerError` (5xx after retries), `IcuHttpError` (other 4xx), `IcuContractError` (response failed schema validation, includes the endpoint name).
 

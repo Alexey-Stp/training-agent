@@ -1,8 +1,12 @@
-import { PrismaClient } from '@prisma/client';
-import { Sport } from '@triathlon/core';
+import { PrismaClient, type PlannedSession, type Prisma } from '@prisma/client';
+import { Intensity, Sport } from '@triathlon/core';
+import type { PlannedSessionDraft, WorkoutBlock } from '@triathlon/core';
 import { logger } from './logger';
 import type { IcuConnectionRepo } from './icu-connect';
 import type { ActivityRepo } from './activity-sync';
+import type { PlannedSessionRecord, PlanStoreRepo } from './plan-store';
+import type { PlanPushRepo } from './plan-push';
+import type { PlanReconcileRepo } from './plan-reconcile';
 import {
   WELLNESS_DEVICE_FIELDS,
   type WellnessDeviceField,
@@ -203,5 +207,149 @@ export const wellnessRepo: WellnessRepo = {
       }
       await tx.icuConnection.update({ where: { userId }, data: { lastWellnessSyncAt: cursor } });
     });
+  },
+};
+
+function toPlannedSessionRecord(row: PlannedSession): PlannedSessionRecord {
+  return {
+    id: row.id,
+    userId: row.userId,
+    date: row.date,
+    slot: row.slot,
+    sport: row.sport as Sport,
+    title: row.title,
+    description: row.description,
+    durationMin: row.durationMin,
+    intensity: row.intensity as Intensity,
+    steps: row.steps as unknown as WorkoutBlock[],
+    status: row.status,
+    icuEventId: row.icuEventId,
+    pushedHash: row.pushedHash,
+    externalChange: row.externalChange,
+    deletedAt: row.deletedAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function plannedSessionContent(d: PlannedSessionDraft) {
+  return {
+    sport: d.sport,
+    title: d.title,
+    description: d.description,
+    durationMin: d.durationMin,
+    intensity: d.intensity,
+    steps: d.steps as unknown as Prisma.InputJsonValue,
+  };
+}
+
+export const plannedSessionRepo: PlanStoreRepo & PlanPushRepo & PlanReconcileRepo = {
+  findConnection(userId) {
+    return prisma.icuConnection.findUnique({ where: { userId } });
+  },
+
+  async listWindow(userId, from, to) {
+    const rows = await prisma.plannedSession.findMany({
+      where: { userId, date: { gte: from, lte: to } },
+      orderBy: [{ date: 'asc' }, { slot: 'asc' }],
+    });
+    return rows.map(toPlannedSessionRecord);
+  },
+
+  async applyPlan(userId, { creates, updates, softDeletes, hardDeletes }, now) {
+    await prisma.$transaction(async (tx) => {
+      if (creates.length > 0) {
+        // skipDuplicates: a concurrent /plan may have created the same (date, slot)
+        await tx.plannedSession.createMany({
+          data: creates.map((d) => ({
+            userId,
+            date: d.date,
+            slot: d.slot,
+            ...plannedSessionContent(d),
+          })),
+          skipDuplicates: true,
+        });
+      }
+      for (const { id, data } of updates) {
+        await tx.plannedSession.update({
+          where: { id },
+          data: { ...plannedSessionContent(data), status: 'draft', deletedAt: null },
+        });
+      }
+      if (softDeletes.length > 0) {
+        await tx.plannedSession.updateMany({
+          where: { userId, id: { in: softDeletes } },
+          data: { deletedAt: now },
+        });
+      }
+      if (hardDeletes.length > 0) {
+        await tx.plannedSession.deleteMany({ where: { userId, id: { in: hardDeletes } } });
+      }
+    });
+  },
+
+  async listPending(userId, fromDate) {
+    const rows = await prisma.plannedSession.findMany({
+      where: {
+        userId,
+        date: { gte: fromDate },
+        OR: [{ deletedAt: { not: null } }, { status: 'draft' }],
+      },
+      orderBy: [{ date: 'asc' }, { slot: 'asc' }],
+    });
+    return rows.map(toPlannedSessionRecord);
+  },
+
+  async markPushed(row, { icuEventId, pushedHash, pushedAt }) {
+    // Only if unchanged since read: a concurrent /plan may have written newer content
+    const { count } = await prisma.plannedSession.updateMany({
+      where: { id: row.id, updatedAt: row.updatedAt },
+      data: { status: 'pushed', icuEventId, pushedHash, pushedAt, externalChange: null },
+    });
+    if (count === 0) {
+      await prisma.plannedSession.updateMany({ where: { id: row.id }, data: { icuEventId } });
+    }
+  },
+
+  async remove(row) {
+    const { count } = await prisma.plannedSession.deleteMany({
+      where: { id: row.id, deletedAt: { not: null } },
+    });
+    if (count === 0) {
+      // Revived by a concurrent /plan: its old event is gone, the next push creates a new one
+      await prisma.plannedSession.updateMany({
+        where: { id: row.id },
+        data: { icuEventId: null, pushedHash: null },
+      });
+    }
+  },
+
+  async flagExternal(id, expectedHash, reason) {
+    const { count } = await prisma.plannedSession.updateMany({
+      where: { id, pushedHash: expectedHash, deletedAt: null },
+      data: { status: 'modified_externally', externalChange: reason },
+    });
+    return count > 0;
+  },
+
+  async listPushed(userId, fromDate) {
+    const rows = await prisma.plannedSession.findMany({
+      where: {
+        userId,
+        status: 'pushed',
+        icuEventId: { not: null },
+        deletedAt: null,
+        date: { gte: fromDate },
+      },
+      orderBy: [{ date: 'asc' }, { slot: 'asc' }],
+    });
+    return rows.map(toPlannedSessionRecord);
+  },
+
+  async listModifiedExternally(userId, fromDate) {
+    const rows = await prisma.plannedSession.findMany({
+      where: { userId, status: 'modified_externally', date: { gte: fromDate } },
+      orderBy: [{ date: 'asc' }, { slot: 'asc' }],
+    });
+    return rows.map(toPlannedSessionRecord);
   },
 };
