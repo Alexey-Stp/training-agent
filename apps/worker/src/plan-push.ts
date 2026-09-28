@@ -3,7 +3,7 @@ import { decryptSecret, renderIcuWorkout, Sport } from '@triathlon/core';
 import { IcuHttpError } from '@triathlon/integrations-icu';
 import type { CreateEventInput, IcuClient, IcuEvent } from '@triathlon/integrations-icu';
 import type { IcuConnectionRecord } from './icu-connect';
-import type { PlannedSessionRecord } from './plan-store';
+import { dateRange, type PlannedSessionRecord } from './plan-store';
 
 export const REASON_DELETED_IN_ICU = 'deleted in intervals.icu';
 
@@ -129,10 +129,7 @@ export async function pushPlannedSessions(
   if (!conn) return { status: 'not_connected' };
 
   const pending = await deps.repo.listPending(userId, today);
-  let created = 0;
-  let updated = 0;
-  let deleted = 0;
-  const flagged: string[] = [];
+  const counts = { created: 0, updated: 0, deleted: 0 };
 
   if (pending.length > 0) {
     const apiKey = decryptSecret(
@@ -143,49 +140,70 @@ export async function pushPlannedSessions(
 
     const writes = pending.filter((row) => row.deletedAt === null);
     const eventIds = await adoptOrphanEvents(writes, client);
-
     for (const row of writes) {
-      const body = toIcuEvent(row);
-      const eventId = eventIds.get(row.id) ?? row.icuEventId;
-      let event: IcuEvent;
-      if (eventId === null) {
-        event = await client.createEvent(body);
-        created++;
-      } else {
-        try {
-          event = await client.updateEvent(eventId, body);
-          updated++;
-        } catch (error) {
-          if (!isNotFound(error)) throw error;
-          // The athlete deleted the event in ICU: their calendar wins
-          if (await deps.repo.flagExternal(row.id, row.pushedHash, REASON_DELETED_IN_ICU)) {
-            flagged.push(row.id);
-          }
-          continue;
-        }
-      }
-      await deps.repo.markPushed(row, {
-        icuEventId: event.id,
-        pushedHash: hashIcuEvent(event),
-        pushedAt: deps.now(),
-      });
+      const outcome = await writeSession(row, eventIds.get(row.id) ?? row.icuEventId, client, deps);
+      if (outcome !== 'flagged') counts[outcome]++;
     }
 
     for (const row of pending.filter((r) => r.deletedAt !== null)) {
-      if (row.icuEventId !== null) {
-        try {
-          await client.deleteEvent(row.icuEventId);
-        } catch (error) {
-          if (!isNotFound(error)) throw error; // already gone in ICU
-        }
-      }
-      await deps.repo.remove(row);
-      deleted++;
+      await deleteSession(row, client, deps);
+      counts.deleted++;
     }
   }
 
+  // Includes rows just flagged by writeSession
   const keptExternal = await deps.repo.listModifiedExternally(userId, today);
-  return { status: 'ok', created, updated, deleted, keptExternal };
+  return { status: 'ok', ...counts, keptExternal };
+}
+
+/**
+ * Creates or updates the session's ICU event and marks the row pushed. A 404 on update
+ * means the athlete deleted the event in ICU: their calendar wins and the row is flagged.
+ */
+async function writeSession(
+  row: PlannedSessionRecord,
+  eventId: number | null,
+  client: PlanPushClient,
+  deps: PlanPushDeps
+): Promise<'created' | 'updated' | 'flagged'> {
+  const body = toIcuEvent(row);
+  let event: IcuEvent;
+  let outcome: 'created' | 'updated';
+  if (eventId === null) {
+    event = await client.createEvent(body);
+    outcome = 'created';
+  } else {
+    try {
+      event = await client.updateEvent(eventId, body);
+      outcome = 'updated';
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+      await deps.repo.flagExternal(row.id, row.pushedHash, REASON_DELETED_IN_ICU);
+      return 'flagged';
+    }
+  }
+  await deps.repo.markPushed(row, {
+    icuEventId: event.id,
+    pushedHash: hashIcuEvent(event),
+    pushedAt: deps.now(),
+  });
+  return outcome;
+}
+
+/** Deletes a tombstoned session's ICU event (a 404 means it is already gone), then the row. */
+async function deleteSession(
+  row: PlannedSessionRecord,
+  client: PlanPushClient,
+  deps: PlanPushDeps
+): Promise<void> {
+  if (row.icuEventId !== null) {
+    try {
+      await client.deleteEvent(row.icuEventId);
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+    }
+  }
+  await deps.repo.remove(row);
 }
 
 /**
@@ -200,8 +218,7 @@ async function adoptOrphanEvents(
   const unlinked = writes.filter((row) => row.icuEventId === null);
   if (unlinked.length === 0) return adopted;
 
-  const dates = unlinked.map((row) => row.date).sort((a, b) => a.localeCompare(b));
-  const events = await client.listEvents(dates[0], dates[dates.length - 1]);
+  const events = await client.listEvents(...dateRange(unlinked));
   const byExternalId = new Map(
     events.filter((e) => e.external_id).map((e) => [e.external_id as string, e.id])
   );

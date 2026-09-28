@@ -90,7 +90,7 @@ export const HARD_TAGS = new Set<string>(['vo2', 'threshold']);
 
 export function isHardSession(session: Session): boolean {
   if (HARD_INTENSITIES.has(session.intensity)) return true;
-  if (session.tags && session.tags.some((tag) => HARD_TAGS.has(tag))) return true;
+  if (session.tags?.some((tag) => HARD_TAGS.has(tag))) return true;
   return false;
 }
 

@@ -105,6 +105,12 @@ export function diffPlan(
   return diff;
 }
 
+/** Oldest and newest date of a non-empty row list, for ICU `oldest`/`newest` queries. */
+export function dateRange(rows: { date: string }[]): [oldest: string, newest: string] {
+  const dates = rows.map((row) => row.date).sort((a, b) => a.localeCompare(b));
+  return [dates[0], dates.at(-1) ?? dates[0]];
+}
+
 export function planWindowEnd(today: string): string {
   return format(addDays(new Date(`${today}T00:00:00`), PLAN_DAYS - 1), 'yyyy-MM-dd');
 }

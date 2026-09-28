@@ -4,7 +4,7 @@ import type { IcuClient, IcuEvent } from '@triathlon/integrations-icu';
 import { runIcuSyncJob } from './activity-sync';
 import type { IcuConnectionRecord } from './icu-connect';
 import { hashIcuEvent, isNotFound, REASON_DELETED_IN_ICU, type PlanPushRepo } from './plan-push';
-import type { PlannedSessionRecord } from './plan-store';
+import { dateRange, type PlannedSessionRecord } from './plan-store';
 
 export const REASON_EDITED_IN_ICU = 'edited in intervals.icu';
 
@@ -58,8 +58,7 @@ export async function reconcilePlannedSessions(
   const apiKey = decryptSecret({ ciphertext: conn.apiKeyCiphertext, iv: conn.apiKeyIv }, deps.keys);
   const client = deps.createClient(conn.icuAthleteId, apiKey);
 
-  const dates = rows.map((row) => row.date).sort((a, b) => a.localeCompare(b));
-  const events = await client.listEvents(dates[0], dates[dates.length - 1]);
+  const events = await client.listEvents(...dateRange(rows));
   const byId = new Map(events.map((e) => [e.id, e]));
 
   let flagged = 0;

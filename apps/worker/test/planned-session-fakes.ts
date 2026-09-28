@@ -89,7 +89,7 @@ export class MemoryPlanRepo implements PlanStoreRepo, PlanPushRepo, PlanReconcil
     );
   }
 
-  applyPlan(userId: string, diff: PlanDiff, now: Date) {
+  applyPlan(_userId: string, diff: PlanDiff, now: Date) {
     for (const d of diff.creates) {
       if (!this.get(d.date, d.slot)) this.insert(d);
     }
@@ -105,7 +105,6 @@ export class MemoryPlanRepo implements PlanStoreRepo, PlanPushRepo, PlanReconcil
       Object.assign(this.rows.get(id)!, { deletedAt: now, updatedAt: this.tick() });
     }
     for (const id of diff.hardDeletes) this.rows.delete(id);
-    void userId;
     return Promise.resolve();
   }
 
@@ -150,7 +149,7 @@ export class MemoryPlanRepo implements PlanStoreRepo, PlanPushRepo, PlanReconcil
 
   flagExternal(id: string, expectedHash: string | null, reason: string) {
     const row = this.rows.get(id);
-    if (!row || row.pushedHash !== expectedHash || row.deletedAt !== null) {
+    if (row?.pushedHash !== expectedHash || row.deletedAt !== null) {
       return Promise.resolve(false);
     }
     Object.assign(row, {

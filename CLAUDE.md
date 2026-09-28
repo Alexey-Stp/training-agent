@@ -57,6 +57,13 @@ The Prisma config is in `prisma.config.ts` (Prisma 7) and loads `DATABASE_URL` f
 
 ## Conventions
 
-- ESLint enforces `no-explicit-any`, `no-floating-promises`, and `no-misused-promises`. Use `void` for fire-and-forget promises. Unused variables must start with `_`. Use the pino `logger` instead of `console.log`.
+- ESLint enforces `no-explicit-any`, `no-floating-promises`, `no-misused-promises`, `prefer-optional-chain`, and `require-array-sort-compare` (string arrays included). Use `void` only for fire-and-forget promises. Unused variables must start with `_`. Use the pino `logger` instead of `console.log`.
+- **Code quality (SonarQube).** Sonar also scans `test/`, which ESLint ignores, so these rules apply to tests and fakes too:
+  - **Cognitive complexity ≤ 15 per function.** Keep orchestrators flat: move the body of a per-item loop, and any try/catch inside it, into a named helper that returns an outcome (see `writeSession`/`deleteSession` in `plan-push.ts`). Nested `if`/`try`/`continue` inside a loop is what drives the score up.
+  - **Don't silence an unused parameter with `void x;`.** Rename it to `_x`.
+  - **No write-only collections or counters.** If a result is only pushed to and never read, remove it. If a later query already returns that data, rely on the query.
+  - **Last element:** use `arr.at(-1)`, not `arr[arr.length - 1]`. Needing the first and last date of rows is common, so reuse `dateRange()` from `plan-store.ts`.
+  - **Optional chaining:** write `row?.x !== y` instead of `!row || row.x !== y` (TypeScript still narrows `row` after it).
+  - **Always pass a compare function to `.sort()`**, e.g. `(a, b) => a.localeCompare(b)`, even for `yyyy-MM-dd` strings.
 - Prettier config is in `.prettierrc`. The commit message template is `.gitmessage` (`<type>: <subject>`, types like feat/fix/refactor; history also uses scopes, e.g. `feat(integrations-icu): ...`).
 - Dates are handled as `yyyy-MM-dd` strings in the user's profile timezone (`date-fns-tz` `toZonedTime`).
