@@ -53,19 +53,24 @@ function shrinkPeak(to: number): LadderStep {
  * build (last first) to its min, extra builds dropped, peak to 1 week then dropped, taper to its
  * min. Taper and the first build block always survive.
  */
+function shrinkTaper(min: number): LadderStep {
+  return {
+    apply: (l) => (l.taper > min ? { ...l, taper: min } : null),
+    describe: () => `taper shortened to ${min.toString()} weeks`,
+  };
+}
+
 function compressionLadder(raceType: RaceType, config: BlockGeneratorConfig): LadderStep[] {
-  const steps: LadderStep[] = [shrinkPeak(config.peakWeeks.min)];
-  for (let i = config.buildBlocks - 1; i >= 0; i--) {
-    steps.push(shrinkBuild(i, config.buildWeeks.min));
-  }
-  for (let i = config.buildBlocks - 1; i >= 1; i--) steps.push(dropBuild(i));
-  steps.push(shrinkPeak(1), shrinkPeak(0));
-  const taperMin = config.taperWeeks[raceType].min;
-  steps.push({
-    apply: (l) => (l.taper > taperMin ? { ...l, taper: taperMin } : null),
-    describe: () => `taper shortened to ${taperMin.toString()} weeks`,
-  });
-  return steps;
+  const n = config.buildBlocks;
+  const lastFirst = Array.from({ length: n }, (_, k) => n - 1 - k);
+  return [
+    shrinkPeak(config.peakWeeks.min),
+    ...lastFirst.map((i) => shrinkBuild(i, config.buildWeeks.min)),
+    ...lastFirst.filter((i) => i >= 1).map((i) => dropBuild(i)),
+    shrinkPeak(1),
+    shrinkPeak(0),
+    shrinkTaper(config.taperWeeks[raceType].min),
+  ];
 }
 
 /**
@@ -127,19 +132,30 @@ function focusFor(type: TrainingBlockType, ctx: FocusContext): string {
   }
 }
 
-function phases(base: number, l: BlockLengths, config: BlockGeneratorConfig) {
-  const out: { type: TrainingBlockType; weeks: number }[] = [];
+interface Phase {
+  type: TrainingBlockType;
+  weeks: number;
+}
+
+/** base1/base2 when base is long enough to split, one base block, or none. */
+function basePhases(base: number, config: BlockGeneratorConfig): Phase[] {
   if (base >= config.baseSplitMinWeeks) {
-    out.push({ type: TrainingBlockType.base, weeks: Math.ceil(base / 2) });
-    out.push({ type: TrainingBlockType.base, weeks: Math.floor(base / 2) });
-  } else if (base > 0) {
-    out.push({ type: TrainingBlockType.base, weeks: base });
+    return [
+      { type: TrainingBlockType.base, weeks: Math.ceil(base / 2) },
+      { type: TrainingBlockType.base, weeks: Math.floor(base / 2) },
+    ];
   }
-  for (const weeks of l.builds) out.push({ type: TrainingBlockType.build, weeks });
-  if (l.peak > 0) out.push({ type: TrainingBlockType.peak, weeks: l.peak });
-  out.push({ type: TrainingBlockType.taper, weeks: l.taper });
-  out.push({ type: TrainingBlockType.race, weeks: l.race });
-  return out;
+  return base > 0 ? [{ type: TrainingBlockType.base, weeks: base }] : [];
+}
+
+function phases(base: number, l: BlockLengths, config: BlockGeneratorConfig): Phase[] {
+  return [
+    ...basePhases(base, config),
+    ...l.builds.map((weeks) => ({ type: TrainingBlockType.build, weeks })),
+    ...(l.peak > 0 ? [{ type: TrainingBlockType.peak, weeks: l.peak }] : []),
+    { type: TrainingBlockType.taper, weeks: l.taper },
+    { type: TrainingBlockType.race, weeks: l.race },
+  ];
 }
 
 /** Lays the blocks out contiguously from `planStart`, in season order, with zero targets. */

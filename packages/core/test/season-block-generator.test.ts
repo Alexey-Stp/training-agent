@@ -246,6 +246,12 @@ describe('generateSeasonPlan', () => {
       expect(() => generateSeasonPlan(input(24, { weeklyHoursAvailable: 0 }))).toThrow(
         SeasonGenerationError
       );
+      expect(() => generateSeasonPlan(input(24, { weeklyHoursAvailable: NaN }))).toThrow(
+        SeasonGenerationError
+      );
+      expect(() => generateSeasonPlan(input(24, { currentWeeklyLoad: NaN }))).toThrow(
+        SeasonGenerationError
+      );
       expect(() => generateSeasonPlan(input(24, { startDate: '2026-02-30' }))).toThrow(
         SeasonGenerationError
       );

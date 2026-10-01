@@ -47,8 +47,11 @@ function inputIssues(input: GenerateSeasonInput): string[] {
   const issues: string[] = [];
   if (!isIsoDate(input.startDate)) issues.push(`startDate ${input.startDate} is not yyyy-MM-dd`);
   if (!isIsoDate(input.aRace.date)) issues.push(`race date ${input.aRace.date} is not yyyy-MM-dd`);
-  if (!(input.weeklyHoursAvailable > 0)) issues.push('weeklyHoursAvailable must be > 0');
-  if (!(input.currentWeeklyLoad >= 0)) issues.push('currentWeeklyLoad must be ≥ 0');
+  // Number.isFinite also rejects NaN, which the comparisons alone would let through
+  const hours = input.weeklyHoursAvailable;
+  const load = input.currentWeeklyLoad;
+  if (!Number.isFinite(hours) || hours <= 0) issues.push('weeklyHoursAvailable must be > 0');
+  if (!Number.isFinite(load) || load < 0) issues.push('currentWeeklyLoad must be ≥ 0');
   return issues;
 }
 
