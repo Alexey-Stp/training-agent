@@ -147,6 +147,15 @@ The plan generator applies these rules automatically:
 
 4. **SwimRotation**: Enforce Wed = technique, Fri = intervals.
 
+### Season Planning (domain model)
+
+A season is stored as a `SeasonPlan` (start date, status, optional A-race) with ordered `TrainingBlock` rows (`base`, `build`, `peak`, `taper`, `race`, `recovery`, `transition`, each with a start date, a length in weeks and weekly swim/bike/run targets). Races are stored as `Race` rows with priority A, B or C. `@triathlon/core` `validateSeasonPlan` checks that:
+
+- blocks are contiguous: each block starts the day after the previous one ends, with no gaps or overlaps;
+- the block containing the A-race is a `race` block that ends on race week and comes right after a `taper` block.
+
+Every issue names the blocks involved, e.g. `block 2 (build) ends 2026-04-26 but block 3 (peak) starts 2026-05-04: 7-day gap`. Season generation and commands come later (E2-T2).
+
 ## intervals.icu Integration
 
 `packages/integrations-icu` (`@triathlon/integrations-icu`) is a typed REST client for [intervals.icu](https://intervals.icu). The worker uses it to validate credentials in `/connect icu` and to sync activities and wellness.

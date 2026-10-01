@@ -6,3 +6,4 @@ export * from './crypto';
 export * from './logger';
 export * from './workout';
 export * from './planned-session';
+export * from './season';
