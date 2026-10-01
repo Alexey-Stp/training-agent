@@ -124,6 +124,7 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 - `workout.ts` - `buildWorkoutSteps` (warmup / main set or N x (work, rest) / cooldown from sport, intensity and duration) and `renderIcuWorkout` (intervals.icu workout text)
 - `planned-session.ts` - `toPlannedSessions`: adapter from the rules-applied `WeekPlan` to `PlannedSession` rows
 - `rules-engine.ts` - Plan validation and adjustments
+- `season/` - Season domain model (`Race`, `SeasonPlan`, `TrainingBlock` and their enums), `validateBlockSequence` / `validateSeasonPlan` / `assertValidSeasonPlan` (`SeasonValidationError`), and the zod-checked `serializeSeasonPlan` / `parseSeasonPlan`
 
 **Design Principles**:
 
@@ -205,7 +206,19 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
    - `status`: `draft` | `pushed` | `modified_externally` | `completed` | `skipped`
    - `icuEventId`, `pushedHash` (hash of the event ICU returned after our last write), `pushedAt`, `externalChange` (reason for the flag), `deletedAt` (tombstone until push deletes the ICU event)
 
-**Migrations**: `prisma/migrations/` starts with `0_init` (baseline of the pre-TA-9 schema), followed by `1_icu_connection`, `2_activity`, `3_wellness` (creates `Wellness`, copies `Fatigue.readiness` → `subjectiveReadiness` and `Fatigue.sleepScore` → `sleepScore`, then drops `Fatigue`, all in one transaction) and `4_planned_session`. Apply with `npm run db:deploy`. A database created earlier with `db push` must be baselined once: `npx prisma migrate resolve --applied 0_init`, then `npm run db:deploy`.
+9. **Race** - a race on the athlete's calendar
+   - `date`, `name`, `priority` (`A` | `B` | `C`), `type` (`sprint` | `olympic` | `half` | `full` | `run` | `other`)
+   - Indexed on (userId, date)
+
+10. **SeasonPlan** - season periodization
+    - `startDate`, `status` (`draft` | `active` | `completed` | `archived`), `aRaceId` (nullable; set to NULL if the race is deleted)
+    - Indexed on (userId, status)
+
+11. **TrainingBlock** - one phase of a SeasonPlan
+    - `order` (unique with seasonPlanId), `type` (`base` | `build` | `peak` | `taper` | `race` | `recovery` | `transition`), `startDate`, `weeks` (block ends `startDate + weeks*7 - 1`), `focus`, weekly targets `targetWeeklyHours`, `targetSwimM`, `targetBikeH`, `targetRunKm`, optional `targetCtl`
+    - Invariants live in core `season/validate.ts`, not in the DB: blocks are contiguous with no gap or overlap, and the block containing the A-race is a `race` block ending on race week, right after a `taper` block
+
+**Migrations**: `prisma/migrations/` starts with `0_init` (baseline of the pre-TA-9 schema), followed by `1_icu_connection`, `2_activity`, `3_wellness` (creates `Wellness`, copies `Fatigue.readiness` → `subjectiveReadiness` and `Fatigue.sleepScore` → `sleepScore`, then drops `Fatigue`, all in one transaction), `4_planned_session` and `5_season_plan`. Apply with `npm run db:deploy`. A database created earlier with `db push` must be baselined once: `npx prisma migrate resolve --applied 0_init`, then `npm run db:deploy`.
 
 **Indices**: Optimized for common queries (last 7 days workouts, user lookup)
 

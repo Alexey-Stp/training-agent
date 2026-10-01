@@ -17,6 +17,8 @@ model User {
   icuConnection     IcuConnection?
   activities        Activity[]
   plannedSessions   PlannedSession[]
+  races             Race[]
+  seasonPlans       SeasonPlan[]
 
   @@index([telegramId])
 }
@@ -174,4 +176,89 @@ model PlannedSession {
 
   @@unique([userId, date, slot])
   @@index([userId, status])
+}
+
+enum RacePriority {
+  A
+  B
+  C
+}
+
+enum RaceType {
+  sprint
+  olympic
+  half
+  full
+  run
+  other
+}
+
+enum SeasonPlanStatus {
+  draft
+  active
+  completed
+  archived
+}
+
+enum TrainingBlockType {
+  base
+  build
+  peak
+  taper
+  race
+  recovery
+  transition
+}
+
+// Target race on the athlete's calendar
+model Race {
+  id          String       @id @default(cuid())
+  userId      String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date        String       // YYYY-MM-DD in the athlete's local time
+  name        String
+  priority    RacePriority
+  type        RaceType
+  seasonPlans SeasonPlan[] @relation("ARace")
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([userId, date])
+}
+
+// Season periodization: ordered TrainingBlocks leading to the A-race.
+// Invariants (contiguity, taper before A-race) live in core season/validate.ts
+model SeasonPlan {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  startDate String           // YYYY-MM-DD, first block's start
+  aRaceId   String?
+  aRace     Race?            @relation("ARace", fields: [aRaceId], references: [id], onDelete: SetNull)
+  status    SeasonPlanStatus @default(draft)
+  blocks    TrainingBlock[]
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@index([userId, status])
+}
+
+model TrainingBlock {
+  id                String            @id @default(cuid())
+  seasonPlanId      String
+  seasonPlan        SeasonPlan        @relation(fields: [seasonPlanId], references: [id], onDelete: Cascade)
+  order             Int               // 1-based position in the season
+  type              TrainingBlockType
+  startDate         String            // YYYY-MM-DD; block ends startDate + weeks*7 - 1
+  weeks             Int
+  focus             String
+  targetWeeklyHours Float
+  targetSwimM       Int               // per week
+  targetBikeH       Float             // per week
+  targetRunKm       Float             // per week
+  targetCtl         Float?            // fitness at block end
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@unique([seasonPlanId, order])
 }
