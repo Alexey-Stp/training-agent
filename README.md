@@ -116,6 +116,7 @@ See [CI_CD.md](CI_CD.md) for complete CI/CD documentation.
 - `/set ftp <number>` - Update FTP (e.g., `/set ftp 280`)
 - `/plan` - Generate 7-day training plan with rules applied (saved, shows each session's intervals.icu status)
 - `/plan push` - Put the 7-day plan on your intervals.icu calendar as structured workouts (they sync to Garmin)
+- `/week show` - Show this week of your active season plan: the block's targets, the sessions that hit them, and any rules-engine adjustments
 - `/log <sport> <minutes> [intensity]` - Log completed workout
 - `/connect icu` - Link your intervals.icu account (asks for athlete ID, then API key)
 - `/connect status` - Show the linked athlete, masked API key and last sync times
@@ -139,9 +140,11 @@ The plan generator applies these rules automatically:
 
 #### Hard Rules (Enforce Safety)
 
-1. **NoHardHard**: No consecutive hard days (Z4/Z5 or tagged vo2/threshold). Second day downgraded to Z2.
+1. **NoHardHard**: No consecutive hard days (Z4/Z5 or tagged vo2/threshold). Second day downgraded to Z2. Two hard sessions on the same day are allowed, and an easy session after a hard one on the same day doesn't let a hard session through the next day.
 2. **ReadinessDownshift**: If today's check-in readiness (`Wellness.subjectiveReadiness`) is ≤ 2, downgrade today's hard sessions to Z2.
 3. **WeeklyLoadCap**: Limit weekly volume to 110% of previous week (10% progressive overload). Scales durations proportionally, min 30min per session.
+
+`applyRules` corrects a plan. `checkHardRules(plan, context)` only checks one and returns the hard rules it still breaks (`RuleViolation[]`, empty when it passes). For example, the 30-minute floor can keep a week over the load cap.
 
 #### Soft Rules (Optimize Structure)
 
@@ -154,7 +157,7 @@ A season is stored as a `SeasonPlan` (start date, status, optional A-race) with 
 - blocks are contiguous: each block starts the day after the previous one ends, with no gaps or overlaps;
 - the block containing the A-race is a `race` block that ends on race week and comes right after a `taper` block.
 
-Every issue names the blocks involved, e.g. `block 2 (build) ends 2026-04-26 but block 3 (peak) starts 2026-05-04: 7-day gap`. Bot commands for seasons come later.
+Every issue names the blocks involved, e.g. `block 2 (build) ends 2026-04-26 but block 3 (peak) starts 2026-05-04: 7-day gap`. There is no bot command to create a season yet. `/week show` reads the active one.
 
 `generateSeasonPlan({ aRace, weeklyHoursAvailable, currentWeeklyLoad, weakSport?, startDate })` builds the block sequence backwards from the A-race. It is a pure function in `@triathlon/core`, and every constant comes from `DEFAULT_BLOCK_GENERATOR_CONFIG`, which can be overridden:
 
@@ -164,6 +167,26 @@ Every issue names the blocks involved, e.g. `block 2 (build) ends 2026-04-26 but
 - **Sport split** by race type (half: swim 15% / bike 55% / run 30%). In base weeks the weak sport gets +10 percentage points, taken from the other sports in proportion to their shares.
 
 It returns the `TrainingBlock[]` (weekly targets are the mean of the block's weeks), a per-week `weeks[]` breakdown, the aligned plan `startDate` (a Monday) and `warnings[]`. The output passes `validateSeasonPlan`.
+
+#### Week expander
+
+`expandWeek(block, weekIndex, profile, { context?, targets?, config? })` turns one week of a block into concrete sessions:
+
+- **Targets**: the block's weekly averages by default. Swim metres are converted at 2500 m/h and run km at 10 km/h, then the sport hours are scaled to add up to `targetWeeklyHours`. Pass `targets` (e.g. a `SeasonWeek` from `generateSeasonPlan`) to size a recovery week inside a block.
+- **Templates by block type**:
+  - **base**: endurance and technique, no Z4/Z5. Wed technique swim, Fri aerobic intervals swim, easy bike, tempo bike, long bike, easy run with strides, easy run, long run.
+  - **build/peak**: the same frame with key sessions: bike VO2 Z5, run threshold Z4, swim threshold Z4.
+  - **taper/race**: short openers. At most 2 intensity touches (bike and run openers), every session ≤ 75 min. Volume over the cap is reported in `warnings`.
+  - **recovery/transition**: the base frame with every session easy.
+- **Placement from the Profile**:
+  - swims go on `swimDays` (the `_optional` day gets the optional swim);
+  - the long bike goes on `longBikeDay` and the key bike on `bikeVo2Day`;
+  - the long run goes on the first of Sat, Sun, Tue, … that is neither the long-bike day nor `noLongRunDay`;
+  - the key run never goes next to the key bike day.
+- **Sizing**: each sport's minutes are split across its sessions by template weight, in 5-minute steps. Sessions under 20 min are dropped (the optional swim first) and their minutes go to the sport's other sessions. The draft hits the total within ±5% and each sport within ±10%.
+- **Rules gate**: the draft goes through `applyRules`, then `checkHardRules`. The result has the rules-applied `plan`, `PlannedSessionDraft[]` `sessions` and `violations`, which is empty unless a rule can't fully correct the week. Example: in a default-profile build week the Fri threshold swim follows Thu VO2, so NoHardHard downgrades it.
+
+`draftBlockWeek` returns the draft before the rules run. `blockWeekTargets`, `blockWeekStart`, `weekIndexForDate` and `weekVolume` are the helpers around it. `/week show` expands the week of the active season that contains today and shows it. It doesn't store anything; `/plan` still owns the `PlannedSession` rows.
 
 ## intervals.icu Integration
 
@@ -476,6 +499,57 @@ Mon Feb 17:
 ⚠️ Weekly load capped at 110% of last week (450min → 495min max)
 
 📋 Applied rules: 3
+```
+
+### `/week show`
+
+```
+📆 Week 1/3 · Build block (Oct 26 – Nov 1)
+🎯 Race-specific intensity
+⏱ 10.0h planned of 10.0h target
+🏊 1.5h/1.5h · 🚴 5.5h/5.5h · 🏃 3.0h/3.0h
+
+Mon Oct 26:
+  🚴 Bike Endurance
+     85min • Z2
+     💡 Easy spin, focus on cadence
+
+Tue Oct 27:
+  🏃 Run Threshold
+     55min • Z4
+     💡 Threshold intervals, easy jog between
+
+Wed Oct 28:
+  🏊 Swim Technique
+     45min • Z2
+     💡 Drills and technique work
+  🏃 Run Easy
+     45min • Z2
+     💡 Conversational pace
+
+Thu Oct 29:
+  🚴 Bike VO2 Max
+     80min • Z5
+     💡 VO2 max intervals, easy spin between
+
+Fri Oct 30:
+  🏊 Swim Threshold Intervals (downgraded to Z2)
+     45min • Z2
+     💡 100s at threshold pace
+Downgraded: No back-to-back hard sessions allowed
+
+Sat Oct 31:
+  🏃 Long Run
+     80min • Z2
+     💡 Steady aerobic run
+
+Sun Nov 1:
+  🚴 Long Bike
+     165min • Z2
+     💡 Steady endurance ride, nutrition practice
+
+⚠️ Adjustments:
+⚠️ Adjusted plan to avoid back-to-back hard sessions
 ```
 
 ### `/log bike 90 z2`

@@ -14,6 +14,7 @@ import {
   activityRepo,
   wellnessRepo,
   plannedSessionRepo,
+  seasonRepo,
 } from './db';
 import {
   handleStart,
@@ -23,7 +24,9 @@ import {
   handlePlanPushCommand,
   handleLog,
   handleUnknown,
+  getRulesContext,
 } from './handlers';
+import { handleWeekShow, MSG_WEEK_USAGE, type WeekShowDeps } from './week-command';
 import {
   handleConnectIcu,
   handleConnectStatus,
@@ -107,6 +110,8 @@ const planReconcileDeps: PlanReconcileDeps = {
   now: () => new Date(),
 };
 
+const weekShowDeps: WeekShowDeps = { repo: seasonRepo, getRulesContext, now: () => new Date() };
+
 const icuConnectDeps: IcuConnectDeps = {
   repo: icuConnectionRepo,
   keys: encKeys,
@@ -173,6 +178,13 @@ const worker = new Worker<CommandJob>(
             args[0]?.toLowerCase() === 'push'
               ? await handlePlanPushCommand(user, planPushCommandDeps)
               : await handlePlan(user, planStoreDeps);
+          break;
+
+        case 'week':
+          response =
+            args[0]?.toLowerCase() === 'show'
+              ? await handleWeekShow(user, weekShowDeps)
+              : MSG_WEEK_USAGE;
           break;
 
         case 'log':

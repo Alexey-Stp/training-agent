@@ -1,5 +1,24 @@
-import { parseISO, getDay } from 'date-fns';
-import { WeekPlan, RulesContext, isHardSession, downgradeToEasy, Intensity, Sport } from './types';
+import { differenceInCalendarDays, parseISO } from 'date-fns';
+import { dayNameOf } from './plan-generator';
+import {
+  WeekPlan,
+  RulesContext,
+  Session,
+  isHardSession,
+  downgradeToEasy,
+  Intensity,
+  Sport,
+} from './types';
+
+export type HardRule = 'NoHardHard' | 'ReadinessDownshift' | 'WeeklyLoadCap';
+
+/** A hard rule a plan still breaks (see `checkHardRules`). */
+export interface RuleViolation {
+  rule: HardRule;
+  message: string;
+  /** Dates of the sessions involved; empty for week-level rules */
+  dates: string[];
+}
 
 export function applyRules(weekPlan: WeekPlan, context: RulesContext): WeekPlan {
   let plan: WeekPlan = { ...weekPlan, warnings: [], appliedRules: [] };
@@ -20,8 +39,7 @@ function applySwimRotationRule(plan: WeekPlan): WeekPlan {
   let modified = false;
 
   sessions.forEach((session, idx) => {
-    const date = parseISO(session.date);
-    const dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][getDay(date)];
+    const dayName = dayNameOf(session.date);
 
     if (session.sport === Sport.swim) {
       if (dayName === 'Wed' && !session.tags?.includes('technique')) {
@@ -90,25 +108,19 @@ function applyNoHardHardRule(plan: WeekPlan): WeekPlan {
   const appliedRules = [...plan.appliedRules];
 
   let modified = false;
-  let previousWasHard = false;
-  let previousDate: string | null = null;
+  // Last date that kept a hard session. Easy sessions don't reset it, so an easy session
+  // after a hard one on the same day doesn't let a hard session through the next day.
+  let lastHardDate: string | null = null;
 
   sessions.forEach((session, idx) => {
-    const currentHard = isHardSession(session);
+    if (!isHardSession(session)) return;
 
-    // Check if this is consecutive day
-    const isConsecutive = previousDate && isNextDay(previousDate, session.date);
-
-    if (isConsecutive && previousWasHard && currentHard) {
-      // Downgrade this session
+    if (lastHardDate !== null && isNextDay(lastHardDate, session.date)) {
       sessions[idx] = downgradeToEasy(session, 'No back-to-back hard sessions allowed');
       modified = true;
-      previousWasHard = false; // After downgrade, this is no longer hard
     } else {
-      previousWasHard = currentHard;
+      lastHardDate = session.date;
     }
-
-    previousDate = session.date;
   });
 
   if (modified) {
@@ -165,11 +177,66 @@ function applyWeeklyLoadCapRule(plan: WeekPlan, context: RulesContext): WeekPlan
   return { ...plan, sessions, warnings, appliedRules };
 }
 
-// Helper function to check if two dates are consecutive days
+// Calendar days, so a DST change between the two dates doesn't matter
 function isNextDay(date1: string, date2: string): boolean {
-  const d1 = new Date(date1 + 'T00:00:00');
-  const d2 = new Date(date2 + 'T00:00:00');
-  const diff = d2.getTime() - d1.getTime();
-  const dayInMs = 24 * 60 * 60 * 1000;
-  return diff === dayInMs;
+  return differenceInCalendarDays(parseISO(date2), parseISO(date1)) === 1;
+}
+
+/**
+ * Hard rules the plan still breaks. `applyRules` corrects a plan; this only checks one,
+ * so callers can gate on its output being empty.
+ */
+export function checkHardRules(plan: WeekPlan, context: RulesContext): RuleViolation[] {
+  return [
+    ...hardHardViolations(plan.sessions),
+    ...readinessViolations(plan, context),
+    ...loadCapViolations(plan, context),
+  ];
+}
+
+function hardHardViolations(sessions: Session[]): RuleViolation[] {
+  const hardDates = [...new Set(sessions.filter(isHardSession).map((s) => s.date))].sort((a, b) =>
+    a.localeCompare(b)
+  );
+  const violations: RuleViolation[] = [];
+  for (let i = 1; i < hardDates.length; i++) {
+    const [prev, date] = [hardDates[i - 1], hardDates[i]];
+    if (isNextDay(prev, date)) {
+      violations.push({
+        rule: 'NoHardHard',
+        message: `Hard sessions on consecutive days (${prev}, ${date})`,
+        dates: [prev, date],
+      });
+    }
+  }
+  return violations;
+}
+
+function readinessViolations(plan: WeekPlan, context: RulesContext): RuleViolation[] {
+  const readiness = context.todayWellness?.subjectiveReadiness;
+  if (readiness == null || readiness > 2) return [];
+  const hardToday = plan.sessions.some((s) => s.date === plan.startDate && isHardSession(s));
+  if (!hardToday) return [];
+  return [
+    {
+      rule: 'ReadinessDownshift',
+      message: `Hard session on ${plan.startDate} despite low readiness (${readiness}/5)`,
+      dates: [plan.startDate],
+    },
+  ];
+}
+
+function loadCapViolations(plan: WeekPlan, context: RulesContext): RuleViolation[] {
+  const lastWeekMinutes = context.last7dStats.totalMinutes;
+  if (lastWeekMinutes === 0) return [];
+  const plannedMinutes = plan.sessions.reduce((sum, s) => sum + s.durationMin, 0);
+  const maxAllowedMinutes = Math.round(lastWeekMinutes * 1.1);
+  if (plannedMinutes <= maxAllowedMinutes) return [];
+  return [
+    {
+      rule: 'WeeklyLoadCap',
+      message: `Week totals ${plannedMinutes}min, above the 110% cap of ${maxAllowedMinutes}min`,
+      dates: [],
+    },
+  ];
 }

@@ -1,7 +1,13 @@
-import { addDays, format, getDay } from 'date-fns';
+import { addDays, format, getDay, parseISO } from 'date-fns';
 import { Sport, Intensity, Session, WeekPlan, UserProfile } from './types';
 
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+/** Profile day names, indexed by `getDay` (0 = Sunday). */
+export const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** Profile day name ("Mon", ...) of a `yyyy-MM-dd` date. */
+export function dayNameOf(date: string): string {
+  return DAY_NAMES[getDay(parseISO(date))];
+}
 
 export function generateDraftPlan(profile: UserProfile, startDate: string): WeekPlan {
   const sessions: Session[] = [];
@@ -163,10 +169,7 @@ export function addOptionalSundaySwim(plan: WeekPlan, profile: UserProfile): Wee
     return plan;
   }
 
-  const sundaySession = plan.sessions.find((s) => {
-    const dayName = DAY_NAMES[getDay(new Date(s.date + 'T00:00:00'))];
-    return dayName === 'Sun';
-  });
+  const sundaySession = plan.sessions.find((s) => dayNameOf(s.date) === 'Sun');
 
   if (sundaySession) {
     const optionalSwim: Session = {

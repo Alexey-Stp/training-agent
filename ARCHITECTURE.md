@@ -89,7 +89,10 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 **Key Files**:
 
 - `index.ts` - BullMQ worker setup and job processing
-- `handlers.ts` - Command handler implementations
+- `handlers.ts` - Command handler implementations, `getRulesContext` (last 7 days of workouts plus that day's wellness)
+- `session-format.ts` - Shared plan reply formatting (sport icons, day headings, session lines) for `/plan` and `/week show`
+- `profile.ts` - `toUserProfile` (Prisma `Profile` → core `UserProfile`), `MSG_NO_PROFILE`
+- `week-command.ts` - `/week show` handler: finds today's block week in the active season and expands it (injected `SeasonRepo`, rules context and clock)
 - `icu-connect.ts` - `connect_icu` / `/connect status` / `/disconnect icu` handlers (injected repo + ICU client for testing)
 - `activity-sync.ts` - ICU activity sync: window, mapping, idempotent diff, `icu-activity-sync` job processor, shared `runIcuSyncJob` error mapping (injected deps)
 - `wellness-sync.ts` - ICU wellness sync: mapping, device-only merge, `icu-wellness-sync` job processor (injected deps)
@@ -99,7 +102,7 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 - `plan-push.ts` - `IcuEventPusher`: creates/updates/deletes ICU `WORKOUT` events for pending sessions, `external_id` orphan adoption, `hashIcuEvent` (injected deps)
 - `plan-reconcile.ts` - `icu-plan-reconcile` job processor: flags sessions whose ICU event was moved/edited/deleted as `modified_externally` (injected deps)
 - `plan-command.ts` - `/plan push` handler (store, push, reply)
-- `db.ts` - Database utilities (user creation, deduplication, `icuConnectionRepo`, `activityRepo`, `wellnessRepo`, `plannedSessionRepo`)
+- `db.ts` - Database utilities (user creation, deduplication, `icuConnectionRepo`, `activityRepo`, `wellnessRepo`, `plannedSessionRepo`, `seasonRepo`)
 
 **Design Principles**:
 
@@ -123,8 +126,8 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 - `plan-generator.ts` - Draft plan generation from template
 - `workout.ts` - `buildWorkoutSteps` (warmup / main set or N x (work, rest) / cooldown from sport, intensity and duration) and `renderIcuWorkout` (intervals.icu workout text)
 - `planned-session.ts` - `toPlannedSessions`: adapter from the rules-applied `WeekPlan` to `PlannedSession` rows
-- `rules-engine.ts` - Plan validation and adjustments
-- `season/` - Season domain model (`Race`, `SeasonPlan`, `TrainingBlock` and their enums), `validateBlockSequence` / `validateSeasonPlan` / `assertValidSeasonPlan` (`SeasonValidationError`), the zod-checked `serializeSeasonPlan` / `parseSeasonPlan`, and `generateSeasonPlan` (`block-generator.ts`): blocks allocated backwards from the A-race with short-runway compression (`block-sequence.ts`), a ≤8% ramp with 3:1 recovery weeks from the current load (`volume.ts`), and a per-sport split with weak-sport bias (`sport-split.ts`). All constants are in `DEFAULT_BLOCK_GENERATOR_CONFIG` (`generator-config.ts`)
+- `rules-engine.ts` - `applyRules` (corrects a plan) and `checkHardRules` (reports the hard rules a plan still breaks as `RuleViolation[]`)
+- `season/` - Season domain model (`Race`, `SeasonPlan`, `TrainingBlock` and their enums), `validateBlockSequence` / `validateSeasonPlan` / `assertValidSeasonPlan` (`SeasonValidationError`), the zod-checked `serializeSeasonPlan` / `parseSeasonPlan`, and `generateSeasonPlan` (`block-generator.ts`): blocks allocated backwards from the A-race with short-runway compression (`block-sequence.ts`), a ≤8% ramp with 3:1 recovery weeks from the current load (`volume.ts`), and a per-sport split with weak-sport bias (`sport-split.ts`). All constants are in `DEFAULT_BLOCK_GENERATOR_CONFIG` (`generator-config.ts`). `week-expander.ts` has `expandWeek(block, weekIndex, profile)`. It picks a session template for the block type (base, build/peak, taper/race, recovery/transition), places the sessions by the profile's day preferences, sizes them to the week's targets, and gates the result through `applyRules` + `checkHardRules`
 
 **Design Principles**:
 
@@ -283,6 +286,16 @@ icu-plan-reconcile  → reconcilePlannedSessions(userId)
 `pushPlannedSessions` loads the pending rows (tombstoned or `draft`, dated today or later). Before creating anything, it lists the ICU events in that range and adopts events whose `external_id` (`ta-<id>`) matches a row without an `icuEventId`. This covers a crash between `createEvent` and the DB write. Each row is saved right after its ICU call: `pushedHash = hashIcuEvent(<event ICU returned>)`, so ICU normalization cannot cause false flags. `markPushed` only sets `pushed` if the row has not changed since it was read. A 404 on delete counts as deleted. A 404 on update means the athlete deleted the event, so the row is flagged.
 
 `reconcilePlannedSessions` loads the `pushed` rows dated from UTC yesterday on, lists the ICU events in their range, and fetches each missing one with `getEvent` (moved out of range, or 404 = deleted). A hash mismatch flags the row `modified_externally` with the reason `moved to <date>`, `edited in intervals.icu` or `deleted in intervals.icu`. The flag is a conditional update on the expected `pushedHash`, so a push that rewrote the event meanwhile wins. `listModifiedExternally` is the query for the daily brief.
+
+### Season week (`/week show`)
+
+```
+/week show → seasonRepo.findActiveSeason → block + weekIndex containing today (weekIndexForDate)
+           → getRulesContext(weekStart) → expandWeek: template → placement → sizing → applyRules → checkHardRules
+           → reply: targets vs planned hours, sessions by day, adjustments, remaining violations
+```
+
+Read-only: nothing is written to `PlannedSession`. The targets are the block's weekly averages, because per-week targets (`SeasonWeek`, e.g. recovery weeks) are not stored.
 
 ### Example: `/plan` Command
 

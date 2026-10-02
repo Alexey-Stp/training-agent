@@ -1,5 +1,12 @@
 import { PrismaClient, type PlannedSession, type Prisma } from '@prisma/client';
-import { Intensity, Sport } from '@triathlon/core';
+import {
+  Intensity,
+  RacePriority,
+  RaceType,
+  SeasonPlanStatus,
+  Sport,
+  TrainingBlockType,
+} from '@triathlon/core';
 import type { PlannedSessionDraft, WorkoutBlock } from '@triathlon/core';
 import { logger } from './logger';
 import type { IcuConnectionRepo } from './icu-connect';
@@ -7,6 +14,7 @@ import type { ActivityRepo } from './activity-sync';
 import type { PlannedSessionRecord, PlanStoreRepo } from './plan-store';
 import type { PlanPushRepo } from './plan-push';
 import type { PlanReconcileRepo } from './plan-reconcile';
+import type { SeasonRepo } from './week-command';
 import {
   WELLNESS_DEVICE_FIELDS,
   type WellnessDeviceField,
@@ -351,5 +359,40 @@ export const plannedSessionRepo: PlanStoreRepo & PlanPushRepo & PlanReconcileRep
       orderBy: [{ date: 'asc' }, { slot: 'asc' }],
     });
     return rows.map(toPlannedSessionRecord);
+  },
+};
+
+export const seasonRepo: SeasonRepo = {
+  async findActiveSeason(userId) {
+    const row = await prisma.seasonPlan.findFirst({
+      where: { userId, status: 'active' },
+      orderBy: { updatedAt: 'desc' },
+      include: { blocks: { orderBy: { order: 'asc' } }, aRace: true },
+    });
+    if (!row) return null;
+    return {
+      startDate: row.startDate,
+      status: row.status as SeasonPlanStatus,
+      aRace: row.aRace
+        ? {
+            date: row.aRace.date,
+            name: row.aRace.name,
+            priority: row.aRace.priority as RacePriority,
+            type: row.aRace.type as RaceType,
+          }
+        : null,
+      blocks: row.blocks.map((b) => ({
+        order: b.order,
+        type: b.type as TrainingBlockType,
+        startDate: b.startDate,
+        weeks: b.weeks,
+        focus: b.focus,
+        targetWeeklyHours: b.targetWeeklyHours,
+        targetSwimM: b.targetSwimM,
+        targetBikeH: b.targetBikeH,
+        targetRunKm: b.targetRunKm,
+        targetCtl: b.targetCtl,
+      })),
+    };
   },
 };

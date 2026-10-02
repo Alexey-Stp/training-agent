@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { applyRules } from '../src/rules-engine';
-import { WeekPlan, Sport, Intensity, RulesContext } from '../src/types';
+import { applyRules, checkHardRules } from '../src/rules-engine';
+import { WeekPlan, Sport, Intensity, RulesContext, Session } from '../src/types';
 
 function wellness(subjectiveReadiness: number | null): RulesContext['todayWellness'] {
   return { subjectiveReadiness, sleepScore: null, hrv: null, restingHr: null, tsb: null };
@@ -506,5 +506,107 @@ describe('Rules Engine', () => {
       // All three rules should be in appliedRules
       expect(result.appliedRules.length).toBeGreaterThanOrEqual(3);
     });
+  });
+
+  describe('NoHardHard with several sessions a day', () => {
+    it('should downgrade a hard session after a day that ended with an easy one', () => {
+      const plan: WeekPlan = {
+        startDate: '2026-02-09',
+        sessions: [
+          hard('2026-02-12', Sport.bike), // Thu VO2
+          easy('2026-02-12', Sport.run), // Thu easy run after it
+          hard('2026-02-13', Sport.swim), // Fri threshold swim
+        ],
+        warnings: [],
+        appliedRules: [],
+      };
+
+      const result = applyRules(plan, NO_HISTORY);
+
+      const friSwim = result.sessions.find((s) => s.date === '2026-02-13');
+      expect(friSwim?.intensity).toBe(Intensity.z2);
+      expect(checkHardRules(result, NO_HISTORY)).toEqual([]);
+    });
+
+    it('should keep two hard sessions on the same day', () => {
+      const plan: WeekPlan = {
+        startDate: '2026-02-09',
+        sessions: [hard('2026-02-10', Sport.run), hard('2026-02-10', Sport.swim)],
+        warnings: [],
+        appliedRules: [],
+      };
+
+      expect(applyRules(plan, NO_HISTORY).appliedRules).toEqual([]);
+    });
+  });
+});
+
+const NO_HISTORY: RulesContext = { last7dStats: { totalMinutes: 0, byDate: [] } };
+
+function hard(date: string, sport: Sport, durationMin = 60): Session {
+  return { date, sport, title: 'Hard', durationMin, intensity: Intensity.z4 };
+}
+
+function easy(date: string, sport: Sport, durationMin = 60): Session {
+  return { date, sport, title: 'Easy', durationMin, intensity: Intensity.z2 };
+}
+
+function week(sessions: Session[]): WeekPlan {
+  return { startDate: '2026-02-09', sessions, warnings: [], appliedRules: [] };
+}
+
+describe('checkHardRules', () => {
+  it('should pass a plan without hard-rule problems', () => {
+    const plan = week([hard('2026-02-10', Sport.run), easy('2026-02-11', Sport.swim)]);
+
+    expect(checkHardRules(plan, NO_HISTORY)).toEqual([]);
+  });
+
+  it('should report hard sessions on consecutive days', () => {
+    const plan = week([
+      hard('2026-02-10', Sport.run),
+      hard('2026-02-11', Sport.bike),
+      hard('2026-02-12', Sport.swim),
+    ]);
+
+    expect(checkHardRules(plan, NO_HISTORY)).toEqual([
+      expect.objectContaining({ rule: 'NoHardHard', dates: ['2026-02-10', '2026-02-11'] }),
+      expect.objectContaining({ rule: 'NoHardHard', dates: ['2026-02-11', '2026-02-12'] }),
+    ]);
+  });
+
+  it('should report a hard session today when readiness is low', () => {
+    const plan = week([hard('2026-02-09', Sport.run)]);
+    const context: RulesContext = { ...NO_HISTORY, todayWellness: wellness(2) };
+
+    expect(checkHardRules(plan, context).map((v) => v.rule)).toEqual(['ReadinessDownshift']);
+    expect(checkHardRules(plan, { ...NO_HISTORY, todayWellness: wellness(3) })).toEqual([]);
+  });
+
+  it('should report a week above 110% of last week', () => {
+    const plan = week([easy('2026-02-09', Sport.bike, 120)]);
+    const context = (totalMinutes: number): RulesContext => ({
+      last7dStats: { totalMinutes, byDate: [] },
+    });
+
+    expect(checkHardRules(plan, context(100)).map((v) => v.rule)).toEqual(['WeeklyLoadCap']);
+    expect(checkHardRules(plan, context(110))).toEqual([]);
+  });
+
+  it('should pass a plan applyRules corrected for all three hard rules', () => {
+    const plan = week([
+      hard('2026-02-09', Sport.run, 55),
+      hard('2026-02-10', Sport.bike, 70),
+      easy('2026-02-11', Sport.swim, 50),
+      hard('2026-02-12', Sport.swim, 50),
+      hard('2026-02-13', Sport.run, 50),
+      easy('2026-02-15', Sport.bike, 180),
+    ]);
+    const context: RulesContext = {
+      last7dStats: { totalMinutes: 400, byDate: [] },
+      todayWellness: wellness(1),
+    };
+
+    expect(checkHardRules(applyRules(plan, context), context)).toEqual([]);
   });
 });
