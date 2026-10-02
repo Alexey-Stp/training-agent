@@ -1,7 +1,13 @@
 import 'dotenv/config';
 import { Worker, Job, Queue } from 'bullmq';
 import { Bot } from 'grammy';
-import { getConfig, getEncKeys } from '@triathlon/core';
+import {
+  getConfig,
+  getEncKeys,
+  SEASON_CANCEL_COMMAND,
+  SEASON_CONFIRM_COMMAND,
+  SEASON_PREVIEW_COMMAND,
+} from '@triathlon/core';
 import type { CommandJob, IcuSyncJob } from '@triathlon/core';
 import { IcuClient } from '@triathlon/integrations-icu';
 import { logger } from './logger';
@@ -15,6 +21,9 @@ import {
   wellnessRepo,
   plannedSessionRepo,
   seasonRepo,
+  raceRepo,
+  profileRepo,
+  loadTrainingHours,
 } from './db';
 import {
   handleStart,
@@ -38,11 +47,23 @@ import { processWellnessSyncJob, type WellnessSyncDeps } from './wellness-sync';
 import { handleSync, type SyncCommandDeps } from './sync-command';
 import type { PlanPushCommandDeps } from './plan-command';
 import type { PlanStoreDeps } from './plan-store';
+import type { PlanSourceDeps } from './plan-source';
+import { handleRace, type RaceCommandDeps } from './race-command';
+import {
+  handleSeason,
+  handleSeasonCancel,
+  handleSeasonConfirm,
+  handleSeasonPreview,
+  type SeasonCommandDeps,
+} from './season-command';
+import { processSeasonPublishJob, type SeasonPublishDeps } from './season-publish';
+import { toTelegramMessage, type Reply } from './reply';
 import { processPlanReconcileJob, type PlanReconcileDeps } from './plan-reconcile';
 import {
   ACTIVITY_SYNC_JOB,
   ICU_SYNC_QUEUE,
   PLAN_RECONCILE_JOB,
+  SEASON_PUBLISH_JOB,
   WELLNESS_SYNC_JOB,
   createIcuSyncScheduler,
   reconcileSchedulers,
@@ -61,12 +82,13 @@ const redisConnection = {
 };
 const encKeys = getEncKeys(config);
 
-// intervals.icu sync: per linked athlete, one repeatable activity job, one wellness job and
-// one planned-workout reconcile job on the icu-sync queue
+// intervals.icu sync: per linked athlete, one repeatable activity job, one wellness job,
+// one planned-workout reconcile job and one season publish job on the icu-sync queue
 const syncJobs: IcuSyncJobSpec[] = [
   { job: ACTIVITY_SYNC_JOB, everyMs: config.ICU_ACTIVITY_SYNC_EVERY_MIN * 60_000 },
   { job: WELLNESS_SYNC_JOB, everyMs: config.ICU_WELLNESS_SYNC_EVERY_MIN * 60_000 },
   { job: PLAN_RECONCILE_JOB, everyMs: config.ICU_PLAN_RECONCILE_EVERY_MIN * 60_000 },
+  { job: SEASON_PUBLISH_JOB, everyMs: config.SEASON_PUBLISH_EVERY_MIN * 60_000 },
 ];
 const syncQueue = new Queue<IcuSyncJob>(ICU_SYNC_QUEUE, { connection: redisConnection });
 const icuSyncScheduler = createIcuSyncScheduler(syncQueue, syncJobs);
@@ -101,6 +123,46 @@ const planPushCommandDeps: PlanPushCommandDeps = {
     createClient: (athleteId, apiKey) => new IcuClient({ athleteId, apiKey }),
     now: () => new Date(),
   },
+};
+
+// With an active season, /plan shows and stores the season's sessions
+const planSourceDeps: PlanSourceDeps = { seasons: seasonRepo, getRulesContext };
+
+const seasonPublishDeps: SeasonPublishDeps = {
+  seasons: seasonRepo,
+  profiles: profileRepo,
+  getRulesContext,
+  store: planStoreDeps,
+  push: planPushCommandDeps.push,
+  windowDays: config.SEASON_PUBLISH_WINDOW_DAYS,
+  now: () => new Date(),
+};
+
+const raceCommandDeps: RaceCommandDeps = { repo: raceRepo, now: () => new Date() };
+
+const seasonCommandDeps: SeasonCommandDeps = {
+  seasons: seasonRepo,
+  races: raceRepo,
+  loadTrainingHours,
+  hasIcuConnection: async (userId) => (await icuConnectionRepo.findByUserId(userId)) !== null,
+  // One-off run right after a season is saved, so the athlete doesn't wait for the scheduler
+  publish: async (userId, draftId) => {
+    await syncQueue.add(
+      SEASON_PUBLISH_JOB,
+      { userId },
+      {
+        jobId: `season-publish-now-${userId}-${draftId}`,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5000 },
+        removeOnComplete: { age: 3600, count: 100 },
+        removeOnFail: { age: 86400 },
+      }
+    );
+  },
+  onPublishError: (error, userId) => {
+    logger.error({ error, userId }, 'Failed to queue season publish');
+  },
+  now: () => new Date(),
 };
 
 const planReconcileDeps: PlanReconcileDeps = {
@@ -149,7 +211,7 @@ const worker = new Worker<CommandJob>(
       }
 
       // Process command
-      let response: string;
+      let response: Reply;
 
       switch (commandName) {
         case 'start':
@@ -176,8 +238,8 @@ const worker = new Worker<CommandJob>(
         case 'plan':
           response =
             args[0]?.toLowerCase() === 'push'
-              ? await handlePlanPushCommand(user, planPushCommandDeps)
-              : await handlePlan(user, planStoreDeps);
+              ? await handlePlanPushCommand(user, planPushCommandDeps, planSourceDeps)
+              : await handlePlan(user, planStoreDeps, planSourceDeps);
           break;
 
         case 'week':
@@ -185,6 +247,27 @@ const worker = new Worker<CommandJob>(
             args[0]?.toLowerCase() === 'show'
               ? await handleWeekShow(user, weekShowDeps)
               : MSG_WEEK_USAGE;
+          break;
+
+        case 'race':
+          response = await handleRace(user, args, raceCommandDeps);
+          break;
+
+        case 'season':
+          response = await handleSeason(user, args, seasonCommandDeps);
+          break;
+
+        // Enqueued by the bot's /season new wizard and its preview buttons
+        case SEASON_PREVIEW_COMMAND:
+          response = await handleSeasonPreview(user, args, seasonCommandDeps);
+          break;
+
+        case SEASON_CONFIRM_COMMAND:
+          response = await handleSeasonConfirm(user, args, seasonCommandDeps);
+          break;
+
+        case SEASON_CANCEL_COMMAND:
+          response = await handleSeasonCancel(user, args, seasonCommandDeps);
           break;
 
         case 'log':
@@ -249,7 +332,8 @@ const worker = new Worker<CommandJob>(
       }
 
       // Send response via Telegram
-      await api.sendMessage(telegramChatId, response);
+      const message = toTelegramMessage(response);
+      await api.sendMessage(telegramChatId, message.text, message.options);
 
       // Mark message as processed
       await markMessageProcessed(user.id, messageId);
@@ -318,6 +402,9 @@ const syncWorker = new Worker<IcuSyncJob>(
         break;
       case PLAN_RECONCILE_JOB:
         result = await processPlanReconcileJob(job.data, planReconcileDeps);
+        break;
+      case SEASON_PUBLISH_JOB:
+        result = await processSeasonPublishJob(job.data, seasonPublishDeps);
         break;
       default:
         result = await processSyncJob(job.data, activitySyncDeps);

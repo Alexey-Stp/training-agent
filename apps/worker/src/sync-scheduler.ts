@@ -5,9 +5,13 @@ export const ICU_SYNC_QUEUE = 'icu-sync';
 export const ACTIVITY_SYNC_JOB = 'icu-activity-sync';
 export const WELLNESS_SYNC_JOB = 'icu-wellness-sync';
 export const PLAN_RECONCILE_JOB = 'icu-plan-reconcile';
+export const SEASON_PUBLISH_JOB = 'season-rolling-publish';
 
 export type IcuSyncJobName =
-  typeof ACTIVITY_SYNC_JOB | typeof WELLNESS_SYNC_JOB | typeof PLAN_RECONCILE_JOB;
+  | typeof ACTIVITY_SYNC_JOB
+  | typeof WELLNESS_SYNC_JOB
+  | typeof PLAN_RECONCILE_JOB
+  | typeof SEASON_PUBLISH_JOB;
 
 /** One repeatable job kind on the icu-sync queue and how often it runs. */
 export interface IcuSyncJobSpec {
@@ -19,7 +23,10 @@ export function syncSchedulerId(job: IcuSyncJobName, userId: string): string {
   return `${job}:${userId}`;
 }
 
-/** Keeps one repeatable job per sync kind (activities, wellness, plan reconcile) per linked athlete. */
+/**
+ * Keeps one repeatable job per sync kind (activities, wellness, plan reconcile, season
+ * publish) per linked athlete.
+ */
 export interface IcuSyncScheduler {
   schedule(userId: string): Promise<void>;
   unschedule(userId: string): Promise<void>;

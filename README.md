@@ -114,9 +114,13 @@ See [CI_CD.md](CI_CD.md) for complete CI/CD documentation.
 - `/start` - Welcome message and help
 - `/profile` - View current training profile
 - `/set ftp <number>` - Update FTP (e.g., `/set ftp 280`)
-- `/plan` - Generate 7-day training plan with rules applied (saved, shows each session's intervals.icu status)
+- `/plan` - Generate 7-day training plan with rules applied (saved, shows each session's intervals.icu status). With an active season, days the season covers show the season's sessions
 - `/plan push` - Put the 7-day plan on your intervals.icu calendar as structured workouts (they sync to Garmin)
 - `/week show` - Show this week of your active season plan: the block's targets, the sessions that hit them, and any rules-engine adjustments
+- `/race add <yyyy-MM-dd> <type> <A|B|C> <name>` - Add a race (type: `sprint|olympic|half|full|run|other`), e.g. `/race add 2027-06-12 olympic A Prague Triathlon`
+- `/race list` - Show your upcoming races
+- `/season new` - Season wizard: pick weekly hours and your weak sport (inline buttons), review the block table, then save. Replacing an active season needs its own **Replace** button
+- `/season show` - Show the active season's block table and where today is
 - `/log <sport> <minutes> [intensity]` - Log completed workout
 - `/connect icu` - Link your intervals.icu account (asks for athlete ID, then API key)
 - `/connect status` - Show the linked athlete, masked API key and last sync times
@@ -157,7 +161,7 @@ A season is stored as a `SeasonPlan` (start date, status, optional A-race) with 
 - blocks are contiguous: each block starts the day after the previous one ends, with no gaps or overlaps;
 - the block containing the A-race is a `race` block that ends on race week and comes right after a `taper` block.
 
-Every issue names the blocks involved, e.g. `block 2 (build) ends 2026-04-26 but block 3 (peak) starts 2026-05-04: 7-day gap`. There is no bot command to create a season yet. `/week show` reads the active one.
+Every issue names the blocks involved, e.g. `block 2 (build) ends 2026-04-26 but block 3 (peak) starts 2026-05-04: 7-day gap`. `/season new` creates a season (see [Season wizard](#season-wizard)), `/season show` and `/week show` read the active one.
 
 `generateSeasonPlan({ aRace, weeklyHoursAvailable, currentWeeklyLoad, weakSport?, startDate })` builds the block sequence backwards from the A-race. It is a pure function in `@triathlon/core`, and every constant comes from `DEFAULT_BLOCK_GENERATOR_CONFIG`, which can be overridden:
 
@@ -186,7 +190,44 @@ It returns the `TrainingBlock[]` (weekly targets are the mean of the block's wee
 - **Sizing**: each sport's minutes are split across its sessions by template weight, in 5-minute steps. Sessions under 20 min are dropped (the optional swim first) and their minutes go to the sport's other sessions. The draft hits the total within ±5% and each sport within ±10%.
 - **Rules gate**: the draft goes through `applyRules`, then `checkHardRules`. The result has the rules-applied `plan`, `PlannedSessionDraft[]` `sessions` and `violations`, which is empty unless a rule can't fully correct the week. Example: in a default-profile build week the Fri threshold swim follows Thu VO2, so NoHardHard downgrades it.
 
-`draftBlockWeek` returns the draft before the rules run. `blockWeekTargets`, `blockWeekStart`, `weekIndexForDate` and `weekVolume` are the helpers around it. `/week show` expands the week of the active season that contains today and shows it. It doesn't store anything; `/plan` still owns the `PlannedSession` rows.
+`draftBlockWeek` returns the draft before the rules run. `blockWeekTargets`, `blockWeekStart`, `weekIndexForDate` and `weekVolume` are the helpers around it. `/week show` expands the week of the active season that contains today and shows it. It doesn't store anything.
+
+`seasonDraftsForRange(season, profile, { from, to }, getContext)` (core `season/window.ts`) expands every block week touching a date range and cuts it to the range, clipped to the season. Both `/plan` and the rolling publisher use it, so they store the same sessions for the same days.
+
+#### Season wizard
+
+1. `/race add` stores the races. A season is built towards the next upcoming **A** race; B and C races inside it are listed in the preview with the block they fall in.
+2. `/season new` (bot, `season-dialog.ts`, state in Redis for 10 minutes) asks for the maximum weekly hours (6–18h buttons, or type 3–30) and the weak sport (swim/bike/run/none). `/cancel` or any other command ends it.
+3. The bot enqueues `season_preview`. The worker averages the last 4 weeks of synced activities as the current load (or assumes half the available hours when there are none), runs `generateSeasonPlan` from today, stores the result as a **draft** `SeasonPlan` (replacing any earlier draft) and replies with the block table:
+
+For an olympic A race on 2027-06-13, 10h/week, weak sport bike, run on 2026-10-07:
+
+```
+# Type  Dates       Wk h/wk Swim Bike  Run
+1 base  12.10-27.12 11  7.4 3.0k 4.1h 21km
+2 base  28.12-14.03 11  7.6 3.1k 4.2h 22km
+3 build 15.03-11.04  4  8.4 4.2k 3.8h 29km
+4 build 12.04-09.05  4  8.6 4.3k 3.9h 30km
+5 peak  10.05-30.05  3  8.7 4.3k 3.9h 30km
+6 taper 31.05-06.06  1  7.5 3.8k 3.4h 26km
+7 race  07.06-13.06  1  4.5 2.3k 2.0h 16km
+```
+
+4. **✅ Save season** activates the draft. If a season is already active, the preview warns and shows **♻️ Replace current season** instead; only that button archives the old season. A confirm without it is refused on the server (in one transaction), so a season activated after the preview was sent can't be replaced by accident. **✖ Cancel** deletes the draft.
+
+Buttons are removed after a tap, and callback jobs use a BullMQ `jobId` per tapped message, so a double tap enqueues one job.
+
+#### Rolling publisher
+
+Each linked athlete has a fourth repeatable job on the `icu-sync` queue, `season-rolling-publish` (every `SEASON_PUBLISH_EVERY_MIN`, default 360). Saving a season also queues one run straight away. Each run:
+
+- computes today (T) in `Profile.timezone`, so the window moves at the athlete's local midnight;
+- expands the active season for **T+1..T+`SEASON_PUBLISH_WINDOW_DAYS`** (default 14), clipped to the season;
+- stores the sessions with `materializeRange` and pushes them with `pushPlannedSessions` from T+1.
+
+Days ≤ T are never read, diffed or pushed. The usual `PlannedSession` rules apply: unchanged sessions are not written (a repeat run makes no ICU calls), and sessions the athlete moved, edited or deleted in intervals.icu (`modified_externally`) or completed/skipped are left alone.
+
+Known limitation: per-week `SeasonWeek` targets aren't stored, so published weeks use the block's weekly averages and in-block recovery weeks are not reduced.
 
 ## intervals.icu Integration
 
@@ -415,11 +456,22 @@ Available commands:
 /profile - View your current profile
 /set ftp <number> - Set your FTP (e.g., /set ftp 280)
 /plan - Generate a 7-day training plan
+/plan push - Put the plan on your intervals.icu calendar (syncs to your watch)
+/week show - Show this week of your season plan
+/race add <yyyy-MM-dd> <type> <A|B|C> <name> - Add a race
+  Example: /race add 2027-06-12 olympic A Prague Triathlon
+/race list - Show your upcoming races
+/season new - Build a season plan towards your next A race
+/season show - Show your active season's blocks
 /log <sport> <minutes> [intensity] - Log a workout
   Examples:
   • /log swim 45 z2
   • /log bike 90 z4
   • /log run 60
+/connect icu - Link your intervals.icu account
+/connect status - Show your intervals.icu link
+/disconnect icu - Remove your intervals.icu link
+/sync - Pull your latest intervals.icu activities and wellness now
 
 📊 Your current profile:
 • FTP: 355W

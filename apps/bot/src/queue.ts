@@ -14,8 +14,16 @@ export const commandQueue = new Queue<CommandJob>('commands', {
 
 logger.info('Command queue initialized');
 
-export async function enqueueCommand(job: CommandJob): Promise<void> {
+/**
+ * `jobId` dedupes: while a job with the same id is still kept, adding another is a no-op
+ * (used for button taps, so a double tap enqueues one job).
+ */
+export async function enqueueCommand(
+  job: CommandJob,
+  opts: { jobId?: string } = {}
+): Promise<void> {
   await commandQueue.add('command', job, {
+    jobId: opts.jobId,
     attempts: 3,
     backoff: {
       type: 'exponential',
