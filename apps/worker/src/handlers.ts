@@ -5,7 +5,6 @@ import {
   generateDraftPlan,
   applyRules,
   addOptionalSundaySwim,
-  UserProfile,
   RulesContext,
   Sport,
   Intensity,
@@ -17,6 +16,13 @@ import { prisma } from './db';
 import { logger } from './logger';
 import { handlePlanPush, type PlanPushCommandDeps } from './plan-command';
 import { materializePlan, type PlanStoreDeps, type PlannedSessionRecord } from './plan-store';
+import { MSG_NO_PROFILE, toUserProfile } from './profile';
+import {
+  formatDayHeader,
+  formatSession,
+  getSportIcon,
+  groupSessionsByDate,
+} from './session-format';
 
 type UserWithProfile = User & { profile: Profile | null };
 
@@ -35,6 +41,7 @@ Available commands:
 /set ftp <number> - Set your FTP (e.g., /set ftp 280)
 /plan - Generate a 7-day training plan
 /plan push - Put the plan on your intervals.icu calendar (syncs to your watch)
+/week show - Show this week of your season plan
 /log <sport> <minutes> [intensity] - Log a workout
   Examples:
   • /log swim 45 z2
@@ -78,22 +85,13 @@ export async function handleSetFtp(user: UserWithProfile, ftp: number): Promise<
   return `✅ FTP updated to ${ftp}W`;
 }
 
-const MSG_NO_PROFILE = '❌ No profile found. Please use /start first.';
-
 /** Generates the rules-applied 7-day plan starting today in the athlete's timezone. */
 async function buildWeekPlan(
   user: UserWithProfile
 ): Promise<{ plan: WeekPlan; startDate: string; now: Date } | null> {
   if (!user.profile) return null;
 
-  const profile: UserProfile = {
-    ftp: user.profile.ftp,
-    timezone: user.profile.timezone,
-    swimDays: user.profile.swimDays as string[],
-    bikeVo2Day: user.profile.bikeVo2Day,
-    longBikeDay: user.profile.longBikeDay,
-    noLongRunDay: user.profile.noLongRunDay,
-  };
+  const profile = toUserProfile(user.profile);
 
   // Get current date in user's timezone
   const now = toZonedTime(new Date(), profile.timezone);
@@ -155,40 +153,14 @@ export async function handlePlan(user: UserWithProfile, store: PlanStoreDeps): P
   // Format response
   let response = `📅 7-Day Training Plan (starting ${format(now, 'PPP')})\n\n`;
 
-  // Group by date
-  const sessionsByDate = new Map<string, Session[]>();
-  plan.sessions.forEach((session: Session) => {
-    const existing = sessionsByDate.get(session.date) || [];
-    existing.push(session);
-    sessionsByDate.set(session.date, existing);
-  });
-
-  // Sort dates
-  const sortedDates = Array.from(sessionsByDate.keys()).sort((a, b) => a.localeCompare(b));
-
-  sortedDates.forEach((date) => {
-    const sessions = sessionsByDate.get(date)!;
-    const dateObj = new Date(date + 'T00:00:00');
-    const dayName = format(dateObj, 'EEE');
-
-    response += `\n${dayName} ${format(dateObj, 'MMM d')}:\n`;
-
-    sessions.forEach((session: Session) => {
-      const icon = getSportIcon(session.sport);
-      const optional = session.tags?.includes('optional') ? ' (optional)' : '';
-      response += `  ${icon} ${session.title}${optional}\n`;
-      response += `     ${session.durationMin}min • ${session.intensity.toUpperCase()}`;
-      if (session.notes) {
-        response += `\n     💡 ${session.notes}`;
-      }
+  for (const [date, sessions] of groupSessionsByDate(plan.sessions)) {
+    response += formatDayHeader(date);
+    for (const session of sessions) {
       const slot = slotBySession.get(session);
       const status = slot ? syncStatusLabel(rowByKey.get(`${session.date}|${slot}`)) : null;
-      if (status) {
-        response += `\n     ${status}`;
-      }
-      response += '\n';
-    });
-  });
+      response += formatSession(session, status);
+    }
+  }
 
   // Add warnings if any
   if (plan.warnings.length > 0) {
@@ -246,6 +218,7 @@ Available commands:
 /profile - View your profile
 /set ftp <number> - Set your FTP
 /plan - Generate training plan
+/week show - Show this season week
 /log <sport> <minutes> [intensity] - Log workout
 
 Type /start for more details.`;
@@ -253,7 +226,8 @@ Type /start for more details.`;
 
 // Helper functions
 
-async function getRulesContext(userId: string, startDate: string): Promise<RulesContext> {
+/** Rules-engine input for a plan starting on `startDate`: the 7 days before it and that day's wellness. */
+export async function getRulesContext(userId: string, startDate: string): Promise<RulesContext> {
   const startDateObj = new Date(startDate + 'T00:00:00');
   const sevenDaysAgo = format(subDays(startDateObj, 7), 'yyyy-MM-dd');
 
@@ -309,23 +283,4 @@ async function getRulesContext(userId: string, startDate: string): Promise<Rules
         }
       : undefined,
   };
-}
-
-function getSportIcon(sport: Sport): string {
-  switch (sport) {
-    case Sport.swim:
-      return '🏊';
-    case Sport.bike:
-      return '🚴';
-    case Sport.run:
-      return '🏃';
-    case Sport.strength:
-      return '💪';
-    case Sport.rest:
-      return '😴';
-    case Sport.other:
-      return '🏅';
-    default:
-      return '🏋️';
-  }
 }

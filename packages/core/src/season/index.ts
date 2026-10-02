@@ -10,3 +10,4 @@ export {
 } from './generator-config';
 export { sportShares } from './sport-split';
 export * from './block-generator';
+export * from './week-expander';
