@@ -13,8 +13,8 @@
     "build": "npm -w @triathlon/core run build && npm -w @triathlon/integrations-icu run build && npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:watch": "npm -w @triathlon/core run test:watch",
-    "lint": "eslint . --ext .ts",
-    "lint:fix": "eslint . --ext .ts --fix",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "format": "prettier --write \"**/*.{ts,js,json,md}\"",
     "format:check": "prettier --check \"**/*.{ts,js,json,md}\"",
     "typecheck": "npm run typecheck --workspaces --if-present",
@@ -26,13 +26,13 @@
     "db:studio": "prisma studio"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^26.6.3",
-    "@typescript-eslint/eslint-plugin": "^8.56.0",
-    "@typescript-eslint/parser": "^8.70.1",
-    "eslint": "^8.56.0",
+    "eslint": "^10.11.0",
     "prettier": "^3.9.9",
     "prisma": "^7.10.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "typescript-eslint": "^8.71.0"
   },
   "dependencies": {
     "@prisma/client": "^7.10.0"
