@@ -255,7 +255,7 @@ This runs:
 
 ### Linting (ESLint)
 
-Configuration: [.eslintrc.json](.eslintrc.json)
+Configuration: [eslint.config.mjs](eslint.config.mjs)
 
 **Rules:**
 - ✅ TypeScript recommended

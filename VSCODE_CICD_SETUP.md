@@ -142,7 +142,7 @@ git push origin v1.0.0
 
 ### 3. Code Quality Tools ✅
 
-#### [.eslintrc.json](.eslintrc.json)
+#### [eslint.config.mjs](eslint.config.mjs)
 **ESLint configuration:**
 
 - TypeScript recommended rules
@@ -177,8 +177,8 @@ npm run format:check  # Check only
 **New scripts:**
 ```json
 {
-  "lint": "eslint . --ext .ts",
-  "lint:fix": "eslint . --ext .ts --fix",
+  "lint": "eslint .",
+  "lint:fix": "eslint . --fix",
   "format": "prettier --write \"**/*.{ts,js,json,md}\"",
   "format:check": "prettier --check \"**/*.{ts,js,json,md}\"",
   "typecheck": "tsc --noEmit",
@@ -318,8 +318,7 @@ git push origin main --tags
 │   ├── launch.json             # Debug configurations
 │   ├── settings.json           # Project settings
 │   └── extensions.json         # Recommended extensions
-├── .eslintrc.json              # ESLint config
-├── .eslintignore               # ESLint ignore patterns
+├── eslint.config.mjs              # ESLint config
 ├── .prettierrc                 # Prettier config
 ├── .prettierignore             # Prettier ignore patterns
 └── CI_CD.md                    # Complete CI/CD docs
@@ -443,7 +442,7 @@ npm run lint:fix
 ```bash
 # Reinstall ESLint extension
 # Reload VSCode
-# Check .eslintrc.json exists
+# Check eslint.config.mjs exists
 ```
 
 ### Prettier Not Formatting
@@ -488,7 +487,7 @@ npm run build
 
 - **VSCode Issues**: Check [.vscode/](.vscode/) files
 - **CI Issues**: Check [.github/workflows/](.github/workflows/) files
-- **Linting Issues**: Check [.eslintrc.json](.eslintrc.json)
+- **Linting Issues**: Check [eslint.config.mjs](eslint.config.mjs)
 - **Formatting Issues**: Check [.prettierrc](.prettierrc)
 
 Full documentation: [CI_CD.md](CI_CD.md)
