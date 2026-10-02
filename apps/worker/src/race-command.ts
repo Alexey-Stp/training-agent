@@ -83,7 +83,8 @@ async function handleRaceList(
 ): Promise<string> {
   const races = await deps.repo.listUpcoming(userId, today);
   if (races.length === 0) return '📭 No upcoming races. Add one with /race add.';
-  return `🏁 Upcoming races\n\n${races.map((r) => `• ${formatRace(r)}`).join('\n')}`;
+  const lines = races.map((r) => '• ' + formatRace(r));
+  return ['🏁 Upcoming races', '', ...lines].join('\n');
 }
 
 /** `/race add …` and `/race list`. */

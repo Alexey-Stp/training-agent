@@ -417,7 +417,7 @@ export const seasonRepo: SeasonStoreRepo = {
     };
   },
 
-  async replaceDraft(userId, draft) {
+  replaceDraft(userId, draft) {
     return prisma.$transaction(async (tx) => {
       // Blocks cascade with their plan
       await tx.seasonPlan.deleteMany({ where: { userId, status: 'draft' } });
@@ -435,7 +435,7 @@ export const seasonRepo: SeasonStoreRepo = {
     });
   },
 
-  async activateDraft(userId, draftId, { replace }) {
+  activateDraft(userId, draftId, { replace }) {
     return prisma.$transaction(async (tx): Promise<ActivateDraftResult> => {
       const plan = await tx.seasonPlan.findFirst({
         where: { id: draftId, userId },

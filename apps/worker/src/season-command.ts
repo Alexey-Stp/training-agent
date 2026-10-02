@@ -135,7 +135,9 @@ function otherRaceLines(races: RaceRecord[], aRace: RaceRecord, blocks: Training
     .flatMap((r) => {
       const block = blockAt(blocks, r.date);
       return block
-        ? [`• ${escapeHtml(`${longDate(r.date)} ${r.priority} ${r.name}`)} (${block.type} block)`]
+        ? [
+            `• ${escapeHtml([longDate(r.date), r.priority, r.name].join(' '))} (${block.type} block)`,
+          ]
         : [];
     });
 }
@@ -216,7 +218,8 @@ export async function handleSeasonPreview(
     });
   } catch (error) {
     if (!(error instanceof SeasonGenerationError)) throw error;
-    return `❌ I can't build a season towards ${raceLabel(aRace)}:\n${error.issues.map((i) => `• ${i}`).join('\n')}`;
+    const issues = error.issues.map((i) => '• ' + i);
+    return [`❌ I can't build a season towards ${raceLabel(aRace)}:`, ...issues].join('\n');
   }
   // A generator bug, not a user error: let the job fail loudly
   assertValidSeasonPlan({

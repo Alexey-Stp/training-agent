@@ -33,7 +33,7 @@ export function parseWeeklyHours(value: string): number | null {
 /** `replace` confirms a draft that replaces the active season; `save` refuses to. */
 export type SeasonDecision = 'save' | 'replace' | 'cancel';
 
-const DECISIONS: readonly SeasonDecision[] = ['save', 'replace', 'cancel'];
+const DECISIONS: ReadonlySet<string> = new Set<SeasonDecision>(['save', 'replace', 'cancel']);
 /** Draft ids are Prisma cuids; the bound also keeps callback data under Telegram's 64 bytes */
 const DRAFT_ID_RE = /^[a-z0-9]{1,40}$/i;
 
@@ -48,6 +48,6 @@ export function parseSeasonDecision(
 ): { decision: SeasonDecision; draftId: string } | null {
   const [prefix, decision, draftId, ...rest] = data.split(':');
   if (prefix !== 'sd' || rest.length > 0 || draftId === undefined) return null;
-  if (!DECISIONS.includes(decision as SeasonDecision) || !DRAFT_ID_RE.test(draftId)) return null;
+  if (!DECISIONS.has(decision) || !DRAFT_ID_RE.test(draftId)) return null;
   return { decision: decision as SeasonDecision, draftId };
 }

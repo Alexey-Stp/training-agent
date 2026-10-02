@@ -102,9 +102,13 @@ export async function seasonDraftsForRange(
   if (!covered) return result;
 
   const inRange = (date: string) => date >= covered.from && date <= covered.to;
-  for (const { block, weekIndex } of blockWeeksIn(season.blocks, covered)) {
-    const context = await getContext(blockWeekStart(block, weekIndex));
-    const week = expandWeek(block, weekIndex, profile, { context });
+  const weeks = blockWeeksIn(season.blocks, covered);
+  // Independent reads, so they run in parallel; results keep the week order
+  const contexts = await Promise.all(
+    weeks.map(({ block, weekIndex }) => getContext(blockWeekStart(block, weekIndex)))
+  );
+  weeks.forEach(({ block, weekIndex }, w) => {
+    const week = expandWeek(block, weekIndex, profile, { context: contexts[w] });
     // toPlannedSessions keeps session order and only drops rest days, so the lists line up
     const stored = week.plan.sessions.filter((s) => s.sport !== Sport.rest && s.durationMin > 0);
     week.sessions.forEach((draft, i) => {
@@ -113,6 +117,6 @@ export async function seasonDraftsForRange(
       result.sessions.push(stored[i]);
     });
     result.warnings.push(...week.plan.warnings);
-  }
+  });
   return result;
 }
