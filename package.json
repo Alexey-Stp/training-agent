@@ -31,7 +31,7 @@
     "@typescript-eslint/parser": "^8.70.1",
     "eslint": "^8.56.0",
     "prettier": "^3.9.9",
-    "prisma": "^7.5.0",
+    "prisma": "^7.10.0",
     "typescript": "^5.3.3"
   },
   "dependencies": {
