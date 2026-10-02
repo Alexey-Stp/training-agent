@@ -11,3 +11,5 @@ export {
 export { sportShares } from './sport-split';
 export * from './block-generator';
 export * from './week-expander';
+export * from './window';
+export * from './table';

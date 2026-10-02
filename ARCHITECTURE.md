@@ -68,10 +68,13 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 - `parser.ts` - Command parsing and validation
 - `queue.ts` - BullMQ queue setup (`enqueueCommand`)
 - `connect-dialog.ts` - `/connect icu` two-step dialog (state in Redis, key `icu-connect:<telegramUserId>`, 10 min TTL)
+- `season-dialog.ts` - `/season new` wizard: weekly hours, then weak sport, as inline buttons or typed answers (state in Redis, key `season-new:<telegramUserId>`, 10 min TTL); submits a `season_preview` job
+- `season-callbacks.ts` - maps the season preview buttons (`sd:save|replace|cancel:<draftId>`) to `season_confirm` / `season_cancel` jobs
+- `state-store.ts` - `RedisStateStore<T>`, the per-user dialog state store both dialogs use
 
 **Design Principles**:
 
-- Thin layer - no business logic, with one exception: the `/connect icu` dialog (see [Athlete linking](#athlete-linking-connect-icu))
+- Thin layer - no business logic, with two exceptions: the `/connect icu` dialog (see [Athlete linking](#athlete-linking-connect-icu)) and the `/season new` wizard (see [Season wizard](#season-wizard-season-new))
 - Fast acknowledgment to user (reaction emoji)
 - Resilient error handling (never crash on bad input)
 - All requests go through queue for consistency
@@ -93,16 +96,21 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 - `session-format.ts` - Shared plan reply formatting (sport icons, day headings, session lines) for `/plan` and `/week show`
 - `profile.ts` - `toUserProfile` (Prisma `Profile` → core `UserProfile`), `MSG_NO_PROFILE`
 - `week-command.ts` - `/week show` handler: finds today's block week in the active season and expands it (injected `SeasonRepo`, rules context and clock)
+- `race-command.ts` - `/race add` (argument parsing, `parseRaceAddArgs`) and `/race list` (injected `RaceRepo`)
+- `season-command.ts` - `season_preview` (generate + store a draft, reply with the block table and buttons), `season_confirm` (draft → active, replacement guard), `season_cancel`, `/season show` (injected `SeasonStoreRepo`, `RaceRepo`, load query, publish queue)
+- `season-publish.ts` - `season-rolling-publish` job processor: expands and pushes the active season for T+1..T+14 (injected deps)
+- `plan-source.ts` - `planWeek`: the week `/plan` and `/plan push` store, from the active season where it covers the days, from the 7-day generator otherwise
+- `reply.ts` - `Reply` (plain text, or HTML + inline keyboard) and `toTelegramMessage`
 - `icu-connect.ts` - `connect_icu` / `/connect status` / `/disconnect icu` handlers (injected repo + ICU client for testing)
 - `activity-sync.ts` - ICU activity sync: window, mapping, idempotent diff, `icu-activity-sync` job processor, shared `runIcuSyncJob` error mapping (injected deps)
 - `wellness-sync.ts` - ICU wellness sync: mapping, device-only merge, `icu-wellness-sync` job processor (injected deps)
 - `sync-command.ts` - `/sync` handler (activities, then wellness)
-- `sync-scheduler.ts` - per-athlete BullMQ job schedulers (activity, wellness, plan reconcile) on the `icu-sync` queue, startup reconciliation
-- `plan-store.ts` - stores the generated week as `PlannedSession` rows: `diffPlan` on (date, slot), tombstones for pushed sessions that leave the plan
-- `plan-push.ts` - `IcuEventPusher`: creates/updates/deletes ICU `WORKOUT` events for pending sessions, `external_id` orphan adoption, `hashIcuEvent` (injected deps)
+- `sync-scheduler.ts` - per-athlete BullMQ job schedulers (activity, wellness, plan reconcile, season publish) on the `icu-sync` queue, startup reconciliation
+- `plan-store.ts` - stores the generated week as `PlannedSession` rows: `diffPlan` on (date, slot), tombstones for pushed sessions that leave the plan; `materializeRange` for any date range, `materializePlan` for today..today+6
+- `plan-push.ts` - `pushPlannedSessions`: creates/updates/deletes ICU `WORKOUT` events for pending sessions, `external_id` orphan adoption, `hashIcuEvent` (injected deps)
 - `plan-reconcile.ts` - `icu-plan-reconcile` job processor: flags sessions whose ICU event was moved/edited/deleted as `modified_externally` (injected deps)
 - `plan-command.ts` - `/plan push` handler (store, push, reply)
-- `db.ts` - Database utilities (user creation, deduplication, `icuConnectionRepo`, `activityRepo`, `wellnessRepo`, `plannedSessionRepo`, `seasonRepo`)
+- `db.ts` - Database utilities (user creation, deduplication, `icuConnectionRepo`, `activityRepo`, `wellnessRepo`, `plannedSessionRepo`, `raceRepo`, `seasonRepo` (active season, drafts, transactional activation), `profileRepo`, `loadTrainingHours`)
 
 **Design Principles**:
 
@@ -127,7 +135,8 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 - `workout.ts` - `buildWorkoutSteps` (warmup / main set or N x (work, rest) / cooldown from sport, intensity and duration) and `renderIcuWorkout` (intervals.icu workout text)
 - `planned-session.ts` - `toPlannedSessions`: adapter from the rules-applied `WeekPlan` to `PlannedSession` rows
 - `rules-engine.ts` - `applyRules` (corrects a plan) and `checkHardRules` (reports the hard rules a plan still breaks as `RuleViolation[]`)
-- `season/` - Season domain model (`Race`, `SeasonPlan`, `TrainingBlock` and their enums), `validateBlockSequence` / `validateSeasonPlan` / `assertValidSeasonPlan` (`SeasonValidationError`), the zod-checked `serializeSeasonPlan` / `parseSeasonPlan`, and `generateSeasonPlan` (`block-generator.ts`): blocks allocated backwards from the A-race with short-runway compression (`block-sequence.ts`), a ≤8% ramp with 3:1 recovery weeks from the current load (`volume.ts`), and a per-sport split with weak-sport bias (`sport-split.ts`). All constants are in `DEFAULT_BLOCK_GENERATOR_CONFIG` (`generator-config.ts`). `week-expander.ts` has `expandWeek(block, weekIndex, profile)`. It picks a session template for the block type (base, build/peak, taper/race, recovery/transition), places the sessions by the profile's day preferences, sizes them to the week's targets, and gates the result through `applyRules` + `checkHardRules`
+- `season/` - Season domain model (`Race`, `SeasonPlan`, `TrainingBlock` and their enums), `validateBlockSequence` / `validateSeasonPlan` / `assertValidSeasonPlan` (`SeasonValidationError`), the zod-checked `serializeSeasonPlan` / `parseSeasonPlan`, and `generateSeasonPlan` (`block-generator.ts`): blocks allocated backwards from the A-race with short-runway compression (`block-sequence.ts`), a ≤8% ramp with 3:1 recovery weeks from the current load (`volume.ts`), and a per-sport split with weak-sport bias (`sport-split.ts`). All constants are in `DEFAULT_BLOCK_GENERATOR_CONFIG` (`generator-config.ts`). `week-expander.ts` has `expandWeek(block, weekIndex, profile)`. It picks a session template for the block type (base, build/peak, taper/race, recovery/transition), places the sessions by the profile's day preferences, sizes them to the week's targets, and gates the result through `applyRules` + `checkHardRules`. `window.ts` has the timezone-aware date helpers (`localToday`, `rollingWindow`, `clipToSeason`) and `seasonDraftsForRange`; `table.ts` has `formatSeasonTable`
+- `season-wizard.ts` - Contract between the bot wizard and the worker: the `season_*` command names, the preview button callback data (`seasonDecisionData` / `parseSeasonDecision`) and the shared answer validation (`parseWeeklyHours`, `WEAK_SPORT_CHOICES`)
 
 **Design Principles**:
 
@@ -275,7 +284,8 @@ Failures:
 ### Planned workout push (`/plan push`, `icu-plan-reconcile`)
 
 ```
-/plan, /plan push   → generateDraftPlan → applyRules → toPlannedSessions → materializePlan(today..today+6)
+/plan, /plan push   → planWeek: active season days → seasonDraftsForRange, other days → generateDraftPlan
+                      → applyRules → toPlannedSessions; then materializePlan(today..today+6)
 /plan push          → pushPlannedSessions(today): tombstones → deleteEvent, drafts → createEvent / updateEvent
 connect_icu ok      → scheduler.upsertJobScheduler('icu-plan-reconcile:<userId>', every 60 min)
 icu-plan-reconcile  → reconcilePlannedSessions(userId)
@@ -296,6 +306,38 @@ icu-plan-reconcile  → reconcilePlannedSessions(userId)
 ```
 
 Read-only: nothing is written to `PlannedSession`. The targets are the block's weekly averages, because per-week targets (`SeasonWeek`, e.g. recovery weeks) are not stored.
+
+### Season wizard (`/season new`)
+
+```
+/race add …        → worker: parseRaceAddArgs → Race row
+/season new        → bot: state {step: hours} in Redis → hours buttons
+tap 10h / "10"     → bot: state {step: weakSport, hours} → weak-sport buttons (wizard message edited in place)
+tap Bike / "bike"  → bot: clear state, enqueue {commandName: 'season_preview', args: ['10', 'bike']}
+season_preview     → worker: next A race, current load (last 4 weeks of Activity), generateSeasonPlan(today),
+                     assertValidSeasonPlan, replaceDraft (SeasonPlan status=draft)
+                     → <pre> block table + [✅ Save | ✖ Cancel], or ⚠️ + [♻️ Replace | ✖ Cancel] if a season is active
+tap Save/Replace   → bot: remove buttons, enqueue season_confirm [draftId, 'replace'?] (jobId per tapped message)
+season_confirm     → worker: activateDraft in one transaction:
+                       other season active and no 'replace' → needs_replace (ask again with Replace)
+                       otherwise archive the old active season, draft → active → queue season-rolling-publish
+tap Cancel         → season_cancel → delete the draft
+```
+
+Nothing becomes active until a confirm. The replacement guard is enforced in `activateDraft`, not just by which button the preview shows.
+
+### Rolling publish (`season-rolling-publish`)
+
+```
+connect_icu ok / startup → upsertJobScheduler('season-rolling-publish:<userId>', every SEASON_PUBLISH_EVERY_MIN)
+season_confirm           → queue.add('season-rolling-publish', {userId})  (one-off, right away)
+season-rolling-publish   → publishSeasonWindow(userId):
+                             T = localToday(now, Profile.timezone); window = T+1..T+SEASON_PUBLISH_WINDOW_DAYS
+                             clip to the season → seasonDraftsForRange → materializeRange(window)
+                             → pushPlannedSessions(from T+1)
+```
+
+Skipped without a connection, profile or active season. Days ≤ T are outside every read and write, so the athlete's day and history are never changed. The interval is not tied to midnight; because each run recomputes T in the athlete's timezone, the next day enters the window within one interval of local midnight. A run with nothing new writes no rows and makes no ICU calls.
 
 ### Example: `/plan` Command
 

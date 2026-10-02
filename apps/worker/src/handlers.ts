@@ -1,20 +1,11 @@
 import { format, subDays } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
 import type { User, Profile } from '@prisma/client';
-import {
-  generateDraftPlan,
-  applyRules,
-  addOptionalSundaySwim,
-  RulesContext,
-  Sport,
-  Intensity,
-  Session,
-  WeekPlan,
-  toPlannedSessions,
-} from '@triathlon/core';
+import { RulesContext, Sport, Intensity } from '@triathlon/core';
 import { prisma } from './db';
 import { logger } from './logger';
 import { handlePlanPush, type PlanPushCommandDeps } from './plan-command';
+import { planWeek, type PlannedWeek, type PlanSourceDeps } from './plan-source';
 import { materializePlan, type PlanStoreDeps, type PlannedSessionRecord } from './plan-store';
 import { MSG_NO_PROFILE, toUserProfile } from './profile';
 import {
@@ -42,6 +33,11 @@ Available commands:
 /plan - Generate a 7-day training plan
 /plan push - Put the plan on your intervals.icu calendar (syncs to your watch)
 /week show - Show this week of your season plan
+/race add <yyyy-MM-dd> <type> <A|B|C> <name> - Add a race
+  Example: /race add 2027-06-12 olympic A Prague Triathlon
+/race list - Show your upcoming races
+/season new - Build a season plan towards your next A race
+/season show - Show your active season's blocks
 /log <sport> <minutes> [intensity] - Log a workout
   Examples:
   • /log swim 45 z2
@@ -85,38 +81,28 @@ export async function handleSetFtp(user: UserWithProfile, ftp: number): Promise<
   return `✅ FTP updated to ${ftp}W`;
 }
 
-/** Generates the rules-applied 7-day plan starting today in the athlete's timezone. */
-async function buildWeekPlan(
-  user: UserWithProfile
-): Promise<{ plan: WeekPlan; startDate: string; now: Date } | null> {
+/** The 7-day plan from today in the athlete's timezone (season sessions where a season is active). */
+async function buildWeek(
+  user: UserWithProfile,
+  source: PlanSourceDeps
+): Promise<{ week: PlannedWeek; startDate: string; now: Date } | null> {
   if (!user.profile) return null;
 
   const profile = toUserProfile(user.profile);
-
-  // Get current date in user's timezone
   const now = toZonedTime(new Date(), profile.timezone);
   const startDate = format(now, 'yyyy-MM-dd');
-
-  // Generate draft plan
-  let plan = generateDraftPlan(profile, startDate);
-  plan = addOptionalSundaySwim(plan, profile);
-
-  // Get context for rules engine
-  const context = await getRulesContext(user.id, startDate);
-
-  // Apply rules
-  plan = applyRules(plan, context);
-
-  return { plan, startDate, now };
+  const week = await planWeek(user.id, profile, startDate, source);
+  return { week, startDate, now };
 }
 
 export async function handlePlanPushCommand(
   user: UserWithProfile,
-  deps: PlanPushCommandDeps
+  deps: PlanPushCommandDeps,
+  source: PlanSourceDeps
 ): Promise<string> {
-  const built = await buildWeekPlan(user);
+  const built = await buildWeek(user, source);
   if (!built) return MSG_NO_PROFILE;
-  return handlePlanPush(user.id, built.startDate, toPlannedSessions(built.plan), deps);
+  return handlePlanPush(user.id, built.startDate, built.week.drafts, deps);
 }
 
 /** intervals.icu status line of a stored session, if there is anything to say. */
@@ -136,24 +122,27 @@ function syncStatusLabel(row: PlannedSessionRecord | undefined): string | null {
   }
 }
 
-export async function handlePlan(user: UserWithProfile, store: PlanStoreDeps): Promise<string> {
-  const built = await buildWeekPlan(user);
+export async function handlePlan(
+  user: UserWithProfile,
+  store: PlanStoreDeps,
+  source: PlanSourceDeps
+): Promise<string> {
+  const built = await buildWeek(user, source);
   if (!built) return MSG_NO_PROFILE;
-  const { plan, startDate, now } = built;
+  const { week, startDate, now } = built;
 
   // Stored as PlannedSession rows so /plan push and the ICU reconcile can track them
-  const drafts = toPlannedSessions(plan);
-  const rows = await materializePlan(user.id, startDate, drafts, store);
+  const rows = await materializePlan(user.id, startDate, week.drafts, store);
   const rowByKey = new Map(rows.map((r) => [`${r.date}|${r.slot}`, r]));
-  // toPlannedSessions keeps session order and only drops rest days
-  const slotBySession = new Map<Session, string>();
-  const trainingSessions = plan.sessions.filter((s) => s.sport !== Sport.rest && s.durationMin > 0);
-  trainingSessions.forEach((s, i) => slotBySession.set(s, drafts[i].slot));
+  const slotBySession = new Map(week.entries.map((e) => [e.session, e.slot]));
 
   // Format response
-  let response = `📅 7-Day Training Plan (starting ${format(now, 'PPP')})\n\n`;
+  let response = `📅 7-Day Training Plan (starting ${format(now, 'PPP')})\n`;
+  if (week.seasonDays) {
+    response += `🏁 ${week.seasonDays.from} → ${week.seasonDays.to} from your season plan (/season show)\n`;
+  }
 
-  for (const [date, sessions] of groupSessionsByDate(plan.sessions)) {
+  for (const [date, sessions] of groupSessionsByDate(week.entries.map((e) => e.session))) {
     response += formatDayHeader(date);
     for (const session of sessions) {
       const slot = slotBySession.get(session);
@@ -163,16 +152,16 @@ export async function handlePlan(user: UserWithProfile, store: PlanStoreDeps): P
   }
 
   // Add warnings if any
-  if (plan.warnings.length > 0) {
+  if (week.warnings.length > 0) {
     response += '\n⚠️ Adjustments:\n';
-    plan.warnings.forEach((warning: string) => {
+    week.warnings.forEach((warning: string) => {
       response += `${warning}\n`;
     });
   }
 
   // Add applied rules summary
-  if (plan.appliedRules.length > 0) {
-    response += `\n📋 Applied rules: ${plan.appliedRules.length}`;
+  if (week.appliedRules > 0) {
+    response += `\n📋 Applied rules: ${week.appliedRules}`;
   }
 
   return response;
@@ -219,6 +208,8 @@ Available commands:
 /set ftp <number> - Set your FTP
 /plan - Generate training plan
 /week show - Show this season week
+/race add | /race list - Manage races
+/season new | /season show - Season plan
 /log <sport> <minutes> [intensity] - Log workout
 
 Type /start for more details.`;

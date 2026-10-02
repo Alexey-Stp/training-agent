@@ -25,6 +25,9 @@ const envSchema = z.object({
   ICU_WELLNESS_SYNC_OVERLAP_DAYS: z.coerce.number().int().nonnegative().default(3),
   // intervals.icu planned-workout reconcile: detects events the athlete moved/edited in ICU
   ICU_PLAN_RECONCILE_EVERY_MIN: z.coerce.number().int().positive().default(60),
+  // Season rolling publisher: keeps the next N local days of the active season pushed to ICU
+  SEASON_PUBLISH_EVERY_MIN: z.coerce.number().int().positive().default(360),
+  SEASON_PUBLISH_WINDOW_DAYS: z.coerce.number().int().min(1).max(28).default(14),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

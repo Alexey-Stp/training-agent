@@ -2,6 +2,7 @@ import type Redis from 'ioredis';
 import { encryptSecret } from '@triathlon/core';
 import type { IcuCredentialsPayload } from '@triathlon/core';
 import { parseCommand } from './parser';
+import { RedisStateStore, type StateStore } from './state-store';
 
 /**
  * Two-step /connect icu dialog (athlete ID, then API key).
@@ -13,11 +14,7 @@ import { parseCommand } from './parser';
 
 export type DialogState = { step: 'athleteId' } | { step: 'apiKey'; athleteId: string };
 
-export interface DialogStore {
-  get(telegramUserId: number): Promise<DialogState | null>;
-  set(telegramUserId: number, state: DialogState): Promise<void>;
-  delete(telegramUserId: number): Promise<void>;
-}
+export type DialogStore = StateStore<DialogState>;
 
 export type DialogOutcome =
   /** Not part of the dialog: continue with the normal enqueue path. */
@@ -108,26 +105,8 @@ export async function handleConnectDialog(
   };
 }
 
-export class RedisDialogStore implements DialogStore {
-  constructor(
-    private readonly redis: Redis,
-    private readonly ttlSeconds = DIALOG_TTL_SECONDS
-  ) {}
-
-  private key(telegramUserId: number): string {
-    return `icu-connect:${telegramUserId.toString()}`;
-  }
-
-  async get(telegramUserId: number): Promise<DialogState | null> {
-    const raw = await this.redis.get(this.key(telegramUserId));
-    return raw ? (JSON.parse(raw) as DialogState) : null;
-  }
-
-  async set(telegramUserId: number, state: DialogState): Promise<void> {
-    await this.redis.set(this.key(telegramUserId), JSON.stringify(state), 'EX', this.ttlSeconds);
-  }
-
-  async delete(telegramUserId: number): Promise<void> {
-    await this.redis.del(this.key(telegramUserId));
+export class RedisDialogStore extends RedisStateStore<DialogState> {
+  constructor(redis: Redis, ttlSeconds = DIALOG_TTL_SECONDS) {
+    super(redis, 'icu-connect', ttlSeconds);
   }
 }

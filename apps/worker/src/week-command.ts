@@ -17,7 +17,7 @@ import { MSG_NO_PROFILE, toUserProfile } from './profile';
 import { formatDayHeader, formatSession, groupSessionsByDate } from './session-format';
 
 export const MSG_NO_SEASON =
-  "📭 You don't have an active season plan yet, so there is no block week to show. Use /plan for a 7-day plan.";
+  "📭 You don't have an active season plan yet, so there is no block week to show. Build one with /season new, or use /plan for a 7-day plan.";
 export const MSG_NOT_IN_SEASON =
   '📭 Today is outside your active season plan, so there is no block week to show.';
 export const MSG_WEEK_USAGE = '❌ Usage: /week show';

@@ -116,24 +116,37 @@ export function planWindowEnd(today: string): string {
 }
 
 /**
- * Stores the plan for the window starting `today` (athlete-local) and returns the
- * window's rows afterwards. Rows before today are history and are left alone.
+ * Stores the drafts dated `from..to` (inclusive) and returns the range's rows afterwards.
+ * Rows outside the range are not read or written.
  */
-export async function materializePlan(
+export async function materializeRange(
   userId: string,
-  today: string,
+  range: { from: string; to: string },
   drafts: PlannedSessionDraft[],
   deps: PlanStoreDeps
 ): Promise<PlannedSessionRecord[]> {
-  const end = planWindowEnd(today);
-  const inWindow = drafts.filter((d) => d.date >= today && d.date <= end);
-  const existing = await deps.repo.listWindow(userId, today, end);
-  const diff = diffPlan(existing, inWindow);
+  const { from, to } = range;
+  const inRange = drafts.filter((d) => d.date >= from && d.date <= to);
+  const existing = await deps.repo.listWindow(userId, from, to);
+  const diff = diffPlan(existing, inRange);
 
   const changes =
     diff.creates.length + diff.updates.length + diff.softDeletes.length + diff.hardDeletes.length;
   if (changes === 0) return existing;
 
   await deps.repo.applyPlan(userId, diff, deps.now());
-  return deps.repo.listWindow(userId, today, end);
+  return deps.repo.listWindow(userId, from, to);
+}
+
+/**
+ * Stores the plan for the window starting `today` (athlete-local) and returns the
+ * window's rows afterwards. Rows before today are history and are left alone.
+ */
+export function materializePlan(
+  userId: string,
+  today: string,
+  drafts: PlannedSessionDraft[],
+  deps: PlanStoreDeps
+): Promise<PlannedSessionRecord[]> {
+  return materializeRange(userId, { from: today, to: planWindowEnd(today) }, drafts, deps);
 }

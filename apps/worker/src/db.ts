@@ -14,7 +14,10 @@ import type { ActivityRepo } from './activity-sync';
 import type { PlannedSessionRecord, PlanStoreRepo } from './plan-store';
 import type { PlanPushRepo } from './plan-push';
 import type { PlanReconcileRepo } from './plan-reconcile';
-import type { SeasonRepo } from './week-command';
+import type { RaceRecord, RaceRepo } from './race-command';
+import type { ActivateDraftResult, SeasonStoreRepo } from './season-command';
+import type { ProfileRepo } from './season-publish';
+import { toUserProfile } from './profile';
 import {
   WELLNESS_DEVICE_FIELDS,
   type WellnessDeviceField,
@@ -362,7 +365,32 @@ export const plannedSessionRepo: PlanStoreRepo & PlanPushRepo & PlanReconcileRep
   },
 };
 
-export const seasonRepo: SeasonRepo = {
+function toRaceRecord(row: Prisma.RaceGetPayload<object>): RaceRecord {
+  return {
+    id: row.id,
+    date: row.date,
+    name: row.name,
+    priority: row.priority as RacePriority,
+    type: row.type as RaceType,
+  };
+}
+
+export const raceRepo: RaceRepo = {
+  async create(userId, race) {
+    const row = await prisma.race.create({ data: { userId, ...race } });
+    return toRaceRecord(row);
+  },
+
+  async listUpcoming(userId, fromDate) {
+    const rows = await prisma.race.findMany({
+      where: { userId, date: { gte: fromDate } },
+      orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
+    });
+    return rows.map(toRaceRecord);
+  },
+};
+
+export const seasonRepo: SeasonStoreRepo = {
   async findActiveSeason(userId) {
     const row = await prisma.seasonPlan.findFirst({
       where: { userId, status: 'active' },
@@ -373,14 +401,7 @@ export const seasonRepo: SeasonRepo = {
     return {
       startDate: row.startDate,
       status: row.status as SeasonPlanStatus,
-      aRace: row.aRace
-        ? {
-            date: row.aRace.date,
-            name: row.aRace.name,
-            priority: row.aRace.priority as RacePriority,
-            type: row.aRace.type as RaceType,
-          }
-        : null,
+      aRace: row.aRace ? toRaceRecord(row.aRace) : null,
       blocks: row.blocks.map((b) => ({
         order: b.order,
         type: b.type as TrainingBlockType,
@@ -395,4 +416,69 @@ export const seasonRepo: SeasonRepo = {
       })),
     };
   },
+
+  replaceDraft(userId, draft) {
+    return prisma.$transaction(async (tx) => {
+      // Blocks cascade with their plan
+      await tx.seasonPlan.deleteMany({ where: { userId, status: 'draft' } });
+      const plan = await tx.seasonPlan.create({
+        data: {
+          userId,
+          startDate: draft.startDate,
+          aRaceId: draft.aRaceId,
+          status: 'draft',
+          blocks: { create: draft.blocks.map((b) => ({ ...b })) },
+        },
+        select: { id: true },
+      });
+      return plan.id;
+    });
+  },
+
+  activateDraft(userId, draftId, { replace }) {
+    return prisma.$transaction(async (tx): Promise<ActivateDraftResult> => {
+      const plan = await tx.seasonPlan.findFirst({
+        where: { id: draftId, userId },
+        select: { status: true },
+      });
+      if (plan?.status === 'active') return { status: 'already_active' };
+      if (plan?.status !== 'draft') return { status: 'not_found' };
+
+      const active = { userId, status: 'active' as const, id: { not: draftId } };
+      const replaced = (await tx.seasonPlan.count({ where: active })) > 0;
+      if (replaced && !replace) return { status: 'needs_replace' };
+
+      // Conditional: a concurrent confirm or cancel of the same draft wins, nothing changes here
+      const { count } = await tx.seasonPlan.updateMany({
+        where: { id: draftId, userId, status: 'draft' },
+        data: { status: 'active' },
+      });
+      if (count === 0) return { status: 'not_found' };
+      await tx.seasonPlan.updateMany({ where: active, data: { status: 'archived' } });
+      return { status: 'activated', replaced };
+    });
+  },
+
+  async deleteDraft(userId, draftId) {
+    const { count } = await prisma.seasonPlan.deleteMany({
+      where: { id: draftId, userId, status: 'draft' },
+    });
+    return count > 0;
+  },
 };
+
+export const profileRepo: ProfileRepo = {
+  async findProfile(userId) {
+    const row = await prisma.profile.findUnique({ where: { userId } });
+    return row ? toUserProfile(row) : null;
+  },
+};
+
+/** Hours of synced intervals.icu activities dated from..to (athlete-local, inclusive). */
+export async function loadTrainingHours(userId: string, from: string, to: string): Promise<number> {
+  const { _sum } = await prisma.activity.aggregate({
+    where: { userId, startDateLocal: { gte: from, lte: to } },
+    _sum: { durationSec: true },
+  });
+  return (_sum.durationSec ?? 0) / 3600;
+}

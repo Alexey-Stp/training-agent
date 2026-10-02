@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   PLAN_RECONCILE_JOB,
+  SEASON_PUBLISH_JOB,
   createIcuSyncScheduler,
   reconcileSchedulers,
   syncSchedulerId,
@@ -120,5 +121,35 @@ describe('reconcileSchedulers', () => {
       expect.objectContaining({ name: 'icu-plan-reconcile', data: { userId: 'old' } })
     );
     expect(queue.removeJobScheduler).toHaveBeenCalledWith('icu-plan-reconcile:gone');
+  });
+
+  it('schedules the season publisher for athletes linked before it existed', async () => {
+    const PUBLISH_EVERY_MS = 6 * 60 * 60_000;
+    const jobs: IcuSyncJobSpec[] = [
+      ...JOBS,
+      { job: SEASON_PUBLISH_JOB, everyMs: PUBLISH_EVERY_MS },
+    ];
+    const queue = fakeQueue([
+      ...current('old'),
+      ...current('up-to-date'),
+      { key: 'season-rolling-publish:up-to-date', every: PUBLISH_EVERY_MS },
+      { key: 'season-rolling-publish:gone', every: PUBLISH_EVERY_MS },
+    ]);
+    const scheduler = createIcuSyncScheduler(queue as unknown as SchedulerQueue, jobs);
+
+    const result = await reconcileSchedulers(
+      queue as unknown as SchedulerQueue,
+      scheduler,
+      ['old', 'up-to-date'],
+      jobs
+    );
+
+    expect(result).toEqual({ scheduled: 1, removed: 1 });
+    expect(queue.upsertJobScheduler).toHaveBeenCalledWith(
+      'season-rolling-publish:old',
+      { every: PUBLISH_EVERY_MS },
+      expect.objectContaining({ name: 'season-rolling-publish', data: { userId: 'old' } })
+    );
+    expect(queue.removeJobScheduler).toHaveBeenCalledWith('season-rolling-publish:gone');
   });
 });
