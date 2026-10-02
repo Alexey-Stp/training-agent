@@ -10,7 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@prisma/client": "^7.4.0",
+    "@prisma/client": "^7.10.0",
     "@triathlon/core": "*",
     "bullmq": "^5.1.5",
     "dotenv": "^18.0.3",
