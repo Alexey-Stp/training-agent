@@ -147,14 +147,23 @@ The plan generator applies these rules automatically:
 
 4. **SwimRotation**: Enforce Wed = technique, Fri = intervals.
 
-### Season Planning (domain model)
+### Season Planning
 
 A season is stored as a `SeasonPlan` (start date, status, optional A-race) with ordered `TrainingBlock` rows (`base`, `build`, `peak`, `taper`, `race`, `recovery`, `transition`, each with a start date, a length in weeks and weekly swim/bike/run targets). Races are stored as `Race` rows with priority A, B or C. `@triathlon/core` `validateSeasonPlan` checks that:
 
 - blocks are contiguous: each block starts the day after the previous one ends, with no gaps or overlaps;
 - the block containing the A-race is a `race` block that ends on race week and comes right after a `taper` block.
 
-Every issue names the blocks involved, e.g. `block 2 (build) ends 2026-04-26 but block 3 (peak) starts 2026-05-04: 7-day gap`. Season generation and commands come later (E2-T2).
+Every issue names the blocks involved, e.g. `block 2 (build) ends 2026-04-26 but block 3 (peak) starts 2026-05-04: 7-day gap`. Bot commands for seasons come later.
+
+`generateSeasonPlan({ aRace, weeklyHoursAvailable, currentWeeklyLoad, weakSport?, startDate })` builds the block sequence backwards from the A-race. It is a pure function in `@triathlon/core`, and every constant comes from `DEFAULT_BLOCK_GENERATOR_CONFIG`, which can be overridden:
+
+- **Blocks**: race week (1w) ← taper (half 2w, full 3w, others 1w) ← peak (3w) ← two build blocks (4w each) ← base for the remaining weeks (split base1/base2 from 6 weeks). A half-distance race 24 weeks out gives `base 5 · base 5 · build 4 · build 4 · peak 3 · taper 2 · race 1`.
+- **Short runways**: the generator shortens peak, then the build blocks, then drops the second build, until base has at least 3 weeks. Taper and one build block are always kept. Each step, and any base under 8 weeks, is reported in `warnings`, e.g. 10 weeks gives `base 3 · build 3 · peak 1 · taper 2 · race 1`.
+- **Volume**: week 1 starts from the athlete's current weekly load, clamped to 50–100% of available hours. Load weeks grow at most 8% over the previous load week, capped at 85% (base), 95% (build) or 100% (peak) of available hours. Every 4th plan week in base/build/peak is a recovery week at 60% of the last load week. Taper weeks drop to 75/60/50% and race week to 45%.
+- **Sport split** by race type (half: swim 15% / bike 55% / run 30%). In base weeks the weak sport gets +10 percentage points, taken from the other sports in proportion to their shares.
+
+It returns the `TrainingBlock[]` (weekly targets are the mean of the block's weeks), a per-week `weeks[]` breakdown, the aligned plan `startDate` (a Monday) and `warnings[]`. The output passes `validateSeasonPlan`.
 
 ## intervals.icu Integration
 
