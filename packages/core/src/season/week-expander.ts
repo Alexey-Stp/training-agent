@@ -425,7 +425,7 @@ function keepLongEnough(placed: Placed[], minutes: number): Placed[] {
     if (short.length === 0) break;
     const drop =
       short.find((p) => p.template.tags?.includes('optional')) ??
-      short.reduce((a, b) => (b.template.weight < a.template.weight ? b : a));
+      short.reduce((a, b) => (b.template.weight < a.template.weight ? b : a), short[0]);
     kept = kept.filter((p) => p !== drop);
   }
   return kept;

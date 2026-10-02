@@ -82,7 +82,8 @@ function formatWeek(block: TrainingBlock, weekIndex: number, week: ExpandedWeek)
     response += `\n⚠️ Adjustments:\n${week.plan.warnings.join('\n')}\n`;
   }
   if (week.violations.length > 0) {
-    response += `\n❗ Still breaks hard rules:\n${week.violations.map((v) => `• ${v.message}`).join('\n')}\n`;
+    const issues = week.violations.map((v) => '• ' + v.message).join('\n');
+    response += `\n❗ Still breaks hard rules:\n${issues}\n`;
   }
   return response;
 }
