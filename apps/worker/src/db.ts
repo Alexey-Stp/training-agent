@@ -8,6 +8,7 @@ import {
   TrainingBlockType,
 } from '@triathlon/core';
 import type { PlannedSessionDraft, WorkoutBlock } from '@triathlon/core';
+import type { LlmCallLogSink } from '@triathlon/ai';
 import { logger } from './logger';
 import type { IcuConnectionRepo } from './icu-connect';
 import type { ActivityRepo } from './activity-sync';
@@ -471,6 +472,12 @@ export const profileRepo: ProfileRepo = {
   async findProfile(userId) {
     const row = await prisma.profile.findUnique({ where: { userId } });
     return row ? toUserProfile(row) : null;
+  },
+};
+
+export const llmCallLogRepo: LlmCallLogSink = {
+  async write(entry) {
+    await prisma.llmCallLog.create({ data: entry });
   },
 };
 
