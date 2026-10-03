@@ -10,6 +10,7 @@ export default defineConfig({
         __dirname,
         '../../packages/integrations-icu/src/index.ts'
       ),
+      '@triathlon/ai': path.resolve(__dirname, '../../packages/ai/src/index.ts'),
     },
   },
   test: {

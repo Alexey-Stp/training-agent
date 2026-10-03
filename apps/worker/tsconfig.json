@@ -5,7 +5,11 @@
     "rootDir": "./src",
     "composite": true
   },
-  "references": [{ "path": "../../packages/core" }, { "path": "../../packages/integrations-icu" }],
+  "references": [
+    { "path": "../../packages/core" },
+    { "path": "../../packages/integrations-icu" },
+    { "path": "../../packages/ai" }
+  ],
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }
