@@ -47,12 +47,14 @@ export function clipToSeason(
   return from <= to ? { from, to } : null;
 }
 
-interface BlockWeek {
+export interface BlockWeek {
   block: TrainingBlock;
+  /** 0-based week of the block */
   weekIndex: number;
 }
 
-function blockWeekAt(blocks: TrainingBlock[], date: string): BlockWeek | null {
+/** The block and block week containing `date`, or null when no block covers it. */
+export function blockWeekAt(blocks: TrainingBlock[], date: string): BlockWeek | null {
   for (const block of blocks) {
     const weekIndex = weekIndexForDate(block, date);
     if (weekIndex !== null) return { block, weekIndex };

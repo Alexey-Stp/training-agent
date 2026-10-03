@@ -508,6 +508,17 @@ const validatedPlan = applyRules(llmPlan, context);
 
 **Recommended**: Start with Option A (minimal changes, adds value)
 
+### Daily coaching context (implemented)
+
+The first building block is `buildDailyContext` in `packages/ai/src/context/`:
+
+1. `collect.ts` reads all sources in parallel through injected repositories (`DailyContextDeps`), filters them to their windows and re-sorts them, so repository order can't change the prompt.
+2. `trends.ts` holds the pure calculations: HRV 30-day baseline (population SD, at least 7 readings), wellness trend, CTL/ATL/TSB with a staleness fallback, compliance per sport, missed key sessions and power zones. `season.ts` finds the block week.
+3. `render.ts` formats each section with fixed numeric precision and states missing data explicitly. `template.ts` fills `{{placeholder}}`s in `src/prompts/daily-v1.md` (copied to `dist/prompts` at build) and fails on unknown or unused placeholders.
+4. `budget.ts` truncates to the token budget: oldest history, then decisions, then trend days.
+
+The template name doubles as the `promptVersion` logged with each LLM call. To change the prompt, add `daily-v2.md` rather than editing v1. `CoachDecision` only exists as a repository interface so far; its table arrives with the ticket that records decisions.
+
 ## Security Considerations
 
 ### Current Protections

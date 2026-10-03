@@ -229,6 +229,18 @@ Days ≤ T are never read, diffed or pushed. The usual `PlannedSession` rules ap
 
 Known limitation: per-week `SeasonWeek` targets aren't stored, so published weeks use the block's weekly averages and in-block recovery weeks are not reduced.
 
+## LLM Coaching Context
+
+`packages/ai` (`@triathlon/ai`) holds the LLM provider adapter (Anthropic or mock, every call logged to `LlmCallLog`) and the daily context builder. `buildDailyContext(deps, userId, date)` reads the athlete's profile, active season, wellness, activities, planned sessions, coach decisions and races through injected repositories and renders the versioned template `packages/ai/src/prompts/daily-v1.md`. It covers:
+
+- profile, FTP and power zones;
+- season position (block, week X of Y, days to the A-race);
+- wellness today plus a 7-day trend, HRV against its 30-day baseline (flagged below mean − 1 SD) and CTL/ATL/TSB;
+- compliance per sport over the last 7 days and missed key sessions (Z4/Z5 or ≥90 min) over the last 14;
+- today and the next 3 days, sessions changed in intervals.icu, the last 5 coach decisions, and upcoming races.
+
+The prompt is deterministic: the same data gives a byte-identical prompt. Missing data is stated ("no device data") rather than left out. If the prompt exceeds `AI_CONTEXT_TOKEN_BUDGET` (default 6000, estimated at 4 characters per token), the oldest training history days are dropped first, then the oldest coach decisions, then wellness trend days. Races, key sessions and upcoming sessions are always kept. Snapshot tests of three fixture athletes live in `packages/ai/test/context/__snapshots__/`.
+
 ## intervals.icu Integration
 
 `packages/integrations-icu` (`@triathlon/integrations-icu`) is a typed REST client for [intervals.icu](https://intervals.icu). The worker uses it to validate credentials in `/connect icu` and to sync activities and wellness.

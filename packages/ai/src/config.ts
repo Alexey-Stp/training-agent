@@ -6,6 +6,8 @@ export const aiEnvSchema = z
     AI_MODEL: z.string().min(1).default('claude-opus-5-5'),
     AI_API_KEY: z.string().min(1).optional(),
     AI_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+    /** Token budget of a rendered coaching prompt (context/budget.ts truncates to fit) */
+    AI_CONTEXT_TOKEN_BUDGET: z.coerce.number().int().positive().default(6000),
   })
   .superRefine((env, ctx) => {
     if (env.AI_PROVIDER === 'anthropic' && !env.AI_API_KEY) {
