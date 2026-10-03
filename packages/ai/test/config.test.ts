@@ -7,6 +7,7 @@ describe('loadAiConfig', () => {
       AI_PROVIDER: 'mock',
       AI_MODEL: 'claude-opus-5-5',
       AI_TIMEOUT_MS: 30000,
+      AI_CONTEXT_TOKEN_BUDGET: 6000,
     });
   });
 
@@ -16,12 +17,14 @@ describe('loadAiConfig', () => {
       AI_API_KEY: 'sk-test',
       AI_MODEL: 'claude-sonnet-5-5',
       AI_TIMEOUT_MS: '15000',
+      AI_CONTEXT_TOKEN_BUDGET: '4000',
     });
     expect(config).toEqual({
       AI_PROVIDER: 'anthropic',
       AI_API_KEY: 'sk-test',
       AI_MODEL: 'claude-sonnet-5-5',
       AI_TIMEOUT_MS: 15000,
+      AI_CONTEXT_TOKEN_BUDGET: 4000,
     });
   });
 
