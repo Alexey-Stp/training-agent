@@ -17,6 +17,12 @@ export interface PlannedSessionRecord extends PlannedSessionDraft {
   externalChange: string | null;
   /** Local tombstone: set when the session left the plan but its ICU event still exists. */
   deletedAt: Date | null;
+  /**
+   * The applied coach decision that changed (or cancelled, or moved away) this session. The
+   * plan generator leaves such rows alone, and push keeps their tombstones, so a regenerated
+   * plan never undoes the athlete's choice.
+   */
+  coachDecisionId: string | null;
   updatedAt: Date;
 }
 
@@ -50,6 +56,11 @@ const PROTECTED_STATUSES = new Set<PlannedSessionStatus>([
   'completed',
   'skipped',
 ]);
+
+/** The athlete's version wins: a protected status, or a coach change they applied */
+function isProtected(row: PlannedSessionRecord): boolean {
+  return PROTECTED_STATUSES.has(row.status) || row.coachDecisionId !== null;
+}
 
 /** JSON with sorted object keys: Postgres JSONB does not keep key order. */
 function stableJson(value: unknown): string {
@@ -89,7 +100,7 @@ export function diffPlan(
     const row = rows.get(keyOf(draft));
     rows.delete(keyOf(draft));
     if (!row) diff.creates.push(draft);
-    else if (PROTECTED_STATUSES.has(row.status)) continue;
+    else if (isProtected(row)) continue;
     else if (row.deletedAt !== null || !isSameContent(row, draft)) {
       diff.updates.push({ id: row.id, data: draft });
     }
@@ -97,7 +108,7 @@ export function diffPlan(
 
   // Rows left over are no longer in the plan
   for (const row of rows.values()) {
-    if (PROTECTED_STATUSES.has(row.status) || row.deletedAt !== null) continue;
+    if (isProtected(row) || row.deletedAt !== null) continue;
     if (row.icuEventId !== null) diff.softDeletes.push(row.id);
     else diff.hardDeletes.push(row.id);
   }

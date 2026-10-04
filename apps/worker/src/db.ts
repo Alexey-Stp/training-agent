@@ -8,7 +8,16 @@ import {
   TrainingBlockType,
 } from '@triathlon/core';
 import type { PlannedSessionDraft, WorkoutBlock } from '@triathlon/core';
-import type { CoachDecision, CoachDecisionSink, LlmCallLogSink } from '@triathlon/ai';
+import type {
+  ActivitySummary,
+  CoachDecision,
+  CoachDecisionSink,
+  DailyContextDeps,
+  LlmCallLogSink,
+  PlannedSessionSummary,
+  SessionDiff,
+  WellnessDay,
+} from '@triathlon/ai';
 import { logger } from './logger';
 import type { IcuConnectionRepo } from './icu-connect';
 import type { ActivityRepo } from './activity-sync';
@@ -19,6 +28,9 @@ import type { RaceRecord, RaceRepo } from './race-command';
 import type { ActivateDraftResult, SeasonStoreRepo } from './season-command';
 import type { ProfileRepo } from './season-publish';
 import { toUserProfile } from './profile';
+import type { CoachChatRepo } from './coach-chat-command';
+import type { CoachAnswerRepo } from './coach-apply';
+import type { CoachPatch } from './coach-plan';
 import {
   WELLNESS_DEVICE_FIELDS,
   type WellnessDeviceField,
@@ -239,6 +251,7 @@ function toPlannedSessionRecord(row: PlannedSession): PlannedSessionRecord {
     pushedHash: row.pushedHash,
     externalChange: row.externalChange,
     deletedAt: row.deletedAt,
+    coachDecisionId: row.coachDecisionId,
     updatedAt: row.updatedAt,
   };
 }
@@ -304,7 +317,14 @@ export const plannedSessionRepo: PlanStoreRepo & PlanPushRepo & PlanReconcileRep
       where: {
         userId,
         date: { gte: fromDate },
-        OR: [{ deletedAt: { not: null } }, { status: 'draft' }],
+        OR: [
+          // A coach tombstone keeps its row; once its event is gone it needs no push
+          {
+            deletedAt: { not: null },
+            OR: [{ coachDecisionId: null }, { icuEventId: { not: null } }],
+          },
+          { deletedAt: null, status: 'draft' },
+        ],
       },
       orderBy: [{ date: 'asc' }, { slot: 'asc' }],
     });
@@ -324,10 +344,11 @@ export const plannedSessionRepo: PlanStoreRepo & PlanPushRepo & PlanReconcileRep
 
   async remove(row) {
     const { count } = await prisma.plannedSession.deleteMany({
-      where: { id: row.id, deletedAt: { not: null } },
+      where: { id: row.id, deletedAt: { not: null }, coachDecisionId: null },
     });
     if (count === 0) {
-      // Revived by a concurrent /plan: its old event is gone, the next push creates a new one
+      // A coach tombstone stays so the plan generator doesn't recreate the session. A row
+      // revived by a concurrent /plan: its old event is gone, the next push creates a new one
       await prisma.plannedSession.updateMany({
         where: { id: row.id },
         data: { icuEventId: null, pushedHash: null },
@@ -492,7 +513,7 @@ export interface CoachDecisionRepo extends CoachDecisionSink {
 
 export const coachDecisionRepo: CoachDecisionRepo = {
   async write(record) {
-    await prisma.coachDecision.create({
+    const { id } = await prisma.coachDecision.create({
       data: {
         ...record,
         rawResponses: toJson(record.rawResponses),
@@ -501,7 +522,9 @@ export const coachDecisionRepo: CoachDecisionRepo = {
         reasons: toJson(record.reasons),
         finalChanges: toJson(record.finalChanges),
       },
+      select: { id: true },
     });
+    return id;
   },
 
   async listRecent(userId, upTo, limit) {
@@ -517,6 +540,184 @@ export const coachDecisionRepo: CoachDecisionRepo = {
       summary: r.summary,
       accepted: r.accepted,
     }));
+  },
+};
+
+/** Reads of the daily coaching context (packages/ai `buildDailyContext`). */
+export const dailyContextDeps: DailyContextDeps = {
+  profiles: profileRepo,
+  seasons: seasonRepo,
+  races: raceRepo,
+  decisions: coachDecisionRepo,
+
+  wellness: {
+    listRange(userId, from, to): Promise<WellnessDay[]> {
+      return prisma.wellness.findMany({
+        where: { userId, date: { gte: from, lte: to } },
+        orderBy: { date: 'asc' },
+        select: {
+          date: true,
+          hrv: true,
+          restingHr: true,
+          sleepHours: true,
+          sleepScore: true,
+          weightKg: true,
+          ctl: true,
+          atl: true,
+          tsb: true,
+          subjectiveReadiness: true,
+          soreness: true,
+        },
+      });
+    },
+  },
+
+  activities: {
+    async listRange(userId, from, to): Promise<ActivitySummary[]> {
+      const rows = await prisma.activity.findMany({
+        where: { userId, startDateLocal: { gte: from, lte: to } },
+        orderBy: [{ startDateLocal: 'asc' }, { startTime: 'asc' }],
+        select: { startDateLocal: true, sport: true, name: true, durationSec: true, load: true },
+      });
+      return rows.map((r) => ({ ...r, sport: r.sport as Sport }));
+    },
+  },
+
+  planned: {
+    async listRange(userId, from, to): Promise<PlannedSessionSummary[]> {
+      const rows = await prisma.plannedSession.findMany({
+        where: { userId, date: { gte: from, lte: to }, deletedAt: null },
+        orderBy: [{ date: 'asc' }, { slot: 'asc' }],
+        select: {
+          date: true,
+          slot: true,
+          sport: true,
+          title: true,
+          durationMin: true,
+          intensity: true,
+          status: true,
+          externalChange: true,
+        },
+      });
+      return rows.map((r) => ({
+        ...r,
+        sport: r.sport as Sport,
+        intensity: r.intensity as Intensity,
+      }));
+    },
+  },
+};
+
+export const coachChatRepo: CoachChatRepo = {
+  async saveMessage(userId, { role, text, telegramMessageId, coachDecisionId }) {
+    // A retried job finds its own row: keep the first
+    await prisma.coachChatMessage.upsert({
+      where: { userId_telegramMessageId_role: { userId, telegramMessageId, role } },
+      create: { userId, role, text, telegramMessageId, coachDecisionId },
+      update: {},
+    });
+  },
+
+  async findReply(userId, telegramMessageId) {
+    const row = await prisma.coachChatMessage.findUnique({
+      where: { userId_telegramMessageId_role: { userId, telegramMessageId, role: 'coach' } },
+    });
+    return row
+      ? { role: row.role, text: row.text, telegramMessageId, coachDecisionId: row.coachDecisionId }
+      : null;
+  },
+
+  async listRecent(userId, limit, excludeMessageId) {
+    const rows = await prisma.coachChatMessage.findMany({
+      where: { userId, NOT: { telegramMessageId: excludeMessageId } },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit,
+      select: { role: true, text: true },
+    });
+    return rows.reverse();
+  },
+};
+
+/** One write of an applied coach decision; the rows it touches get `coachDecisionId`. */
+function writeCoachPatch(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  coachDecisionId: string,
+  patch: CoachPatch,
+  now: Date
+) {
+  switch (patch.kind) {
+    case 'update':
+      return tx.plannedSession.update({
+        where: { id: patch.id, userId },
+        data: {
+          date: patch.session.date,
+          slot: patch.session.slot,
+          ...plannedSessionContent(patch.session),
+          status: 'draft',
+          deletedAt: null,
+          coachDecisionId,
+        },
+      });
+    case 'cancel':
+      return tx.plannedSession.update({
+        where: { id: patch.id, userId },
+        data: { deletedAt: now, coachDecisionId },
+      });
+    case 'tombstone':
+      return tx.plannedSession.create({
+        data: {
+          userId,
+          date: patch.session.date,
+          slot: patch.session.slot,
+          ...plannedSessionContent(patch.session),
+          deletedAt: now,
+          coachDecisionId,
+        },
+      });
+  }
+}
+
+export const coachAnswerRepo: CoachAnswerRepo = {
+  async findDecision(userId, decisionId) {
+    const row = await prisma.coachDecision.findFirst({
+      where: { id: decisionId, userId },
+      select: { id: true, finalAction: true, finalChanges: true, accepted: true },
+    });
+    return row
+      ? {
+          id: row.id,
+          finalAction: row.finalAction,
+          finalChanges: row.finalChanges as unknown as SessionDiff[],
+          accepted: row.accepted,
+        }
+      : null;
+  },
+
+  async decline(userId, decisionId, now) {
+    const { count } = await prisma.coachDecision.updateMany({
+      where: { id: decisionId, userId, accepted: null },
+      data: { accepted: false, answeredAt: now },
+    });
+    return count > 0;
+  },
+
+  listWindow: (userId, from, to) => plannedSessionRepo.listWindow(userId, from, to),
+
+  applyDecision(userId, decisionId, patches, now) {
+    return prisma.$transaction(async (tx) => {
+      // Conditional: a double tap or a concurrent Keep wins, nothing changes here
+      const { count } = await tx.coachDecision.updateMany({
+        where: { id: decisionId, userId, accepted: null },
+        data: { accepted: true, answeredAt: now },
+      });
+      if (count === 0) return false;
+      // In order: a moved session frees its (date, slot) before its tombstone takes it
+      for (const patch of patches) {
+        await writeCoachPatch(tx, userId, decisionId, patch, now);
+      }
+      return true;
+    });
   },
 };
 

@@ -77,7 +77,12 @@ function stripUnsupported(node: unknown): unknown {
   return out;
 }
 
-/** JSON schema for `CompleteOptions.jsonSchema`, limited to what structured outputs accepts. */
+/** JSON schema of `schema` for `CompleteOptions.jsonSchema`, limited to what structured outputs accepts. */
+export function structuredOutputSchema(schema: z.ZodType): Record<string, unknown> {
+  return stripUnsupported(z.toJSONSchema(schema)) as Record<string, unknown>;
+}
+
+/** JSON schema for `CompleteOptions.jsonSchema` of a daily suggestion. */
 export function coachSuggestionJsonSchema(): Record<string, unknown> {
-  return stripUnsupported(z.toJSONSchema(CoachSuggestionSchema)) as Record<string, unknown>;
+  return structuredOutputSchema(CoachSuggestionSchema);
 }

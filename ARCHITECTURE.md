@@ -546,6 +546,40 @@ CoachDecision row (always exactly one per run)
 - `guardrails.ts`: `runGuardrails` is pure and works on a clone. Integrity problems (unknown session, stale `before`, past or locked session, duplicate field) reject. Per-change limits clamp. Hard-rule violations the change introduced (`checkHardRules`: NoHardHard, ReadinessDownshift, WeeklyLoadCap) reject; violations the plan already had are not blamed on the LLM. Limits live in `DEFAULT_GUARDRAIL_CONFIG`. `deterministicRecommendation` is the rules-engine-only fallback: `applyRules` on the window, keeping only downgrades and reductions.
 - `run.ts`: an accepted suggestion keeps the LLM's message. Clamped and fallback outcomes get a deterministic message that lists the final changes and why. Every run writes one `CoachDecision` (context hash, raw replies, parsed suggestion, verdict, reasons, final action and changes); only a failing write throws, so BullMQ retries. The worker's `coachDecisionRepo` also serves `DailyContextDeps.decisions`.
 
+### Coach chat (implemented)
+
+```
+Telegram text (no /) ─► bot: coach_chat job (text in rawText, "typing…")
+        │
+        ▼
+worker handleCoachChat
+  stored coach reply for this message? ─ yes ─► resend it (retry)
+  Redis SADD coach-chat:<user>:<local day> messageId, SCARD > COACH_CHAT_DAILY_LIMIT ─► limit notice, no LLM call
+  save user CoachChatMessage
+  daily prompt + plan today..+6 + last 10 messages + RulesContext (in parallel)
+        │
+        ▼
+runCoachChat: chat-system-v1 (system) + daily prompt + chat-v1.md
+  LLM structured output { reply, suggestion | null } (one repair call at most)
+  suggestion with changes ─► runGuardrails ─► CoachDecision (origin chat)
+        │
+        ▼
+save coach CoachChatMessage (+ coachDecisionId when applicable)
+reply: text, or text + [✅ Apply | ↩️ Keep my plan] (callback cc:a|k:<decisionId>)
+        │ tap
+        ▼
+coach_apply / coach_keep job (jobId per tapped message)
+  apply: re-run runGuardrails on today's plan ─ not accept ─► "plan changed", accepted=false
+         buildCoachPatches ─► one transaction: accepted=true (only if unanswered) + PlannedSession writes
+         pushPlannedSessions (ICU event updated/moved/deleted)
+  keep:  accepted=false
+```
+
+- `packages/ai/src/chat/`: `runCoachChat` reuses the suggestion pipeline's `requestStructured` (the generic one-repair call), `CoachSuggestionSchema`, `runGuardrails` and messages. A plain answer writes nothing; a suggestion writes one `CoachDecision` with `origin: 'chat'`. A rejected or fully clamped suggestion is still stored for audit but offers no buttons.
+- `apps/worker/src/coach-plan.ts`: `buildCoachPatches` turns the decision's `SessionDiff`s into row writes. Duration, intensity and sport changes regenerate `steps` (core `buildWorkoutSteps`). A move takes the first free `<sport>-<n>` slot on the new day (tombstones count as taken), keeps the row's `icuEventId` so push moves the event, and leaves a tombstone at the old `(date, slot)`.
+- `PlannedSession.coachDecisionId` protects applied changes: `diffPlan` treats such rows like `modified_externally`, so `/plan` and the season publisher neither overwrite nor recreate them. Push deletes a coach tombstone's ICU event but keeps the row, and skips coach tombstones that have no event.
+- Rate limit: a Redis set per user and local day holds message ids, so a retried job counts once. `COACH_CHAT_DAILY_LIMIT` (core config, default 30).
+
 ## Security Considerations
 
 ### Current Protections

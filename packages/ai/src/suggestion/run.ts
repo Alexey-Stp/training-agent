@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto';
 import type { RulesContext } from '@triathlon/core';
 import type { LlmProvider } from '../types';
+import { errorName, sha256 } from '../util';
 import {
   DEFAULT_GUARDRAIL_CONFIG,
   deterministicRecommendation,
@@ -42,7 +42,13 @@ export interface RunCoachSuggestionInput {
 
 type Outcome = Omit<
   CoachDecisionRecord,
-  'userId' | 'date' | 'promptVersion' | 'suggestionPromptVersion' | 'contextHash' | 'summary'
+  | 'userId'
+  | 'origin'
+  | 'date'
+  | 'promptVersion'
+  | 'suggestionPromptVersion'
+  | 'contextHash'
+  | 'summary'
 >;
 
 interface Audit {
@@ -54,15 +60,6 @@ interface Audit {
 }
 
 const RULES_ONLY_NOTE = "Today's advice comes from your plan's standard safety rules.";
-
-function errorName(error: unknown): string {
-  if (error instanceof Error) return error.name + ': ' + error.message;
-  return typeof error === 'string' ? error : 'Unknown error';
-}
-
-function sha256(text: string): string {
-  return createHash('sha256').update(text).digest('hex');
-}
 
 /** The rules engine's recommendation; if even that fails, keep the plan unchanged. */
 function safeRecommendation(
@@ -166,6 +163,7 @@ export async function runCoachSuggestion(
 
   const record: CoachDecisionRecord = {
     userId: input.userId,
+    origin: 'daily',
     date: input.date,
     promptVersion: input.promptVersion,
     suggestionPromptVersion: SUGGESTION_PROMPT_VERSION,

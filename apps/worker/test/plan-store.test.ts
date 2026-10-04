@@ -84,6 +84,27 @@ describe('diffPlan', () => {
     });
   });
 
+  it('never touches sessions changed by an applied coach decision, tombstones included', () => {
+    const repo = new MemoryPlanRepo();
+    const moved = repo.insert(draft('2026-09-29', 'run-1', { durationMin: 40 }), {
+      status: 'pushed',
+      icuEventId: 1,
+      coachDecisionId: 'dec-1',
+    });
+    const movedAway = repo.insert(draft(TODAY, 'run-0'), {
+      deletedAt: new Date(),
+      coachDecisionId: 'dec-1',
+    });
+
+    // The plan still has the session on its old day, unchanged: nothing comes back
+    expect(diffPlan([moved, movedAway], [draft(TODAY, 'run-0')])).toEqual({
+      creates: [],
+      updates: [],
+      softDeletes: [],
+      hardDeletes: [],
+    });
+  });
+
   it('tombstones removed pushed sessions and hard-deletes never-pushed ones', () => {
     const repo = new MemoryPlanRepo();
     const pushed = repo.insert(draft(TODAY, 'run-0'), { status: 'pushed', icuEventId: 9 });

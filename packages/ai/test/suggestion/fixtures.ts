@@ -129,8 +129,8 @@ export function scripted(...replies: (string | Error)[]): MockProvider {
 export class FakeDecisionSink implements CoachDecisionSink {
   readonly records: CoachDecisionRecord[] = [];
 
-  write(record: CoachDecisionRecord): Promise<void> {
+  write(record: CoachDecisionRecord): Promise<string> {
     this.records.push(record);
-    return Promise.resolve();
+    return Promise.resolve('decision-' + this.records.length.toString());
   }
 }

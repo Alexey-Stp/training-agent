@@ -1,3 +1,5 @@
+import { COACH_CHAT_COMMAND } from '@triathlon/core';
+
 export interface ParsedCommand {
   commandName: string;
   args: string[];
@@ -14,14 +16,15 @@ export function parseCommand(text: string): ParsedCommand {
     return { commandName, args };
   }
 
-  // Any other text is treated as unknown command
-  return {
-    commandName: 'unknown',
-    args: [trimmed],
-  };
+  // Any other text is a message to the coach; the job carries it in rawText
+  return { commandName: COACH_CHAT_COMMAND, args: [] };
 }
 
-export function validateSetFtpArgs(args: string[]): { valid: boolean; ftp?: number; error?: string } {
+export function validateSetFtpArgs(args: string[]): {
+  valid: boolean;
+  ftp?: number;
+  error?: string;
+} {
   if (args.length < 2) {
     return { valid: false, error: 'Usage: /set ftp <number>' };
   }
@@ -46,7 +49,10 @@ export function validateLogArgs(args: string[]): {
   error?: string;
 } {
   if (args.length < 2) {
-    return { valid: false, error: 'Usage: /log <sport> <durationMin> [intensity]\nSport: swim|bike|run' };
+    return {
+      valid: false,
+      error: 'Usage: /log <sport> <durationMin> [intensity]\nSport: swim|bike|run',
+    };
   }
 
   const sport = args[0].toLowerCase();

@@ -15,14 +15,20 @@ export interface MarkPushedInput {
 
 export interface PlanPushRepo {
   findConnection(userId: string): Promise<IcuConnectionRecord | null>;
-  /** Rows dated on/after `fromDate` that need a push: tombstoned, or status draft. */
+  /**
+   * Rows dated on/after `fromDate` that need a push: tombstoned, or status draft. A coach
+   * tombstone without an ICU event needs nothing and is left out.
+   */
   listPending(userId: string, fromDate: string): Promise<PlannedSessionRecord[]>;
   /**
    * Stores the event id and marks the row pushed. If the row changed since it was read
    * (a concurrent /plan), only the event id is stored and the row stays draft.
    */
   markPushed(row: PlannedSessionRecord, input: MarkPushedInput): Promise<void>;
-  /** Removes a tombstoned row after its ICU event is gone (if it was revived meanwhile, drops its event id). */
+  /**
+   * Removes a tombstoned row after its ICU event is gone. A coach tombstone, or a row revived
+   * meanwhile, stays and only drops its event id.
+   */
   remove(row: PlannedSessionRecord): Promise<void>;
   /**
    * Flags the row modified_externally, unless its pushedHash is no longer `expectedHash`

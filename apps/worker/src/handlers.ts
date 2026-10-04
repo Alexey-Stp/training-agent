@@ -200,7 +200,7 @@ export async function handleLog(
 }
 
 export function handleUnknown(): string {
-  return `❓ I didn't understand that command.
+  return `❓ I don't know that command. Plain messages go to your coach, so just ask.
 
 Available commands:
 /start - Show help

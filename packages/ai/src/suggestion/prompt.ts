@@ -10,6 +10,17 @@ function sessionLine(s: CoachPlanSession, config: GuardrailConfig): string {
   return `- \`${s.id}\`: ${s.sport} ${s.durationMin.toString()} min ${zone} "${s.title}"${locked}`;
 }
 
+/** The sessions the coach may change, one line each with its id; `None.` when there are none. */
+export function renderSessionLines(
+  sessions: readonly CoachPlanSession[],
+  config: GuardrailConfig = DEFAULT_GUARDRAIL_CONFIG
+): string {
+  const lines = [...sessions]
+    .sort((a, b) => a.date.localeCompare(b.date) || a.slot.localeCompare(b.slot))
+    .map((s) => sessionLine(s, config));
+  return lines.length > 0 ? lines.join('\n') : 'None.';
+}
+
 /** The daily context prompt plus the answer format and the guardrail limits, stated up front. */
 export function buildSuggestionPrompt(
   dailyPrompt: string,
@@ -17,14 +28,11 @@ export function buildSuggestionPrompt(
   date: string,
   config: GuardrailConfig = DEFAULT_GUARDRAIL_CONFIG
 ): string {
-  const lines = [...sessions]
-    .sort((a, b) => a.date.localeCompare(b.date) || a.slot.localeCompare(b.slot))
-    .map((s) => sessionLine(s, config));
   const instructions = renderTemplate(loadPromptTemplate(SUGGESTION_PROMPT_VERSION), {
     date,
     maxReduction: Math.round(config.maxReduction * 100).toString(),
     lowReadiness: config.lowReadiness.toString(),
-    sessions: lines.length > 0 ? lines.join('\n') : 'None.',
+    sessions: renderSessionLines(sessions, config),
   });
   return dailyPrompt.trimEnd() + '\n\n' + instructions;
 }

@@ -1,7 +1,11 @@
 import 'dotenv/config';
 import { Worker, Job, Queue } from 'bullmq';
 import { Bot } from 'grammy';
+import Redis from 'ioredis';
 import {
+  COACH_APPLY_COMMAND,
+  COACH_CHAT_COMMAND,
+  COACH_KEEP_COMMAND,
   getConfig,
   getEncKeys,
   SEASON_CANCEL_COMMAND,
@@ -10,6 +14,7 @@ import {
 } from '@triathlon/core';
 import type { CommandJob, IcuSyncJob } from '@triathlon/core';
 import { IcuClient } from '@triathlon/integrations-icu';
+import { createLlmProvider, loadAiConfig, withCallLog } from '@triathlon/ai';
 import { logger } from './logger';
 import {
   prisma,
@@ -24,6 +29,11 @@ import {
   raceRepo,
   profileRepo,
   loadTrainingHours,
+  llmCallLogRepo,
+  coachDecisionRepo,
+  coachChatRepo,
+  coachAnswerRepo,
+  dailyContextDeps,
 } from './db';
 import {
   handleStart,
@@ -59,6 +69,9 @@ import {
 import { processSeasonPublishJob, type SeasonPublishDeps } from './season-publish';
 import { toTelegramMessage, type Reply } from './reply';
 import { processPlanReconcileJob, type PlanReconcileDeps } from './plan-reconcile';
+import { RedisChatLimiter } from './chat-limit';
+import { handleCoachChat, type CoachChatDeps } from './coach-chat-command';
+import { handleCoachAnswer, type CoachAnswerDeps } from './coach-apply';
 import {
   ACTIVITY_SYNC_JOB,
   ICU_SYNC_QUEUE,
@@ -173,6 +186,33 @@ const planReconcileDeps: PlanReconcileDeps = {
 };
 
 const weekShowDeps: WeekShowDeps = { repo: seasonRepo, getRulesContext, now: () => new Date() };
+
+// Coach chat: one LLM provider for the worker, every call logged to LlmCallLog
+const aiConfig = loadAiConfig();
+const llmProvider = withCallLog(createLlmProvider(aiConfig), llmCallLogRepo, { logger });
+const redis = new Redis(redisConnection);
+
+const coachChatDeps: CoachChatDeps = {
+  limiter: new RedisChatLimiter(redis),
+  dailyLimit: config.COACH_CHAT_DAILY_LIMIT,
+  chats: coachChatRepo,
+  context: dailyContextDeps,
+  getRulesContext,
+  provider: llmProvider,
+  decisions: coachDecisionRepo,
+  tokenBudget: aiConfig.AI_CONTEXT_TOKEN_BUDGET,
+  now: () => new Date(),
+};
+
+const coachAnswerDeps: CoachAnswerDeps = {
+  repo: coachAnswerRepo,
+  getRulesContext,
+  push: planPushCommandDeps.push,
+  onPushError: (error, userId) => {
+    logger.error({ error, userId }, 'Failed to push applied coach changes');
+  },
+  now: () => new Date(),
+};
 
 const icuConnectDeps: IcuConnectDeps = {
   repo: icuConnectionRepo,
@@ -325,6 +365,24 @@ const worker = new Worker<CommandJob>(
           response = await handleSync(user.id, syncCommandDeps);
           break;
 
+        // Plain text from the bot; the message is in rawText (never logged)
+        case COACH_CHAT_COMMAND:
+          response = await handleCoachChat(
+            user,
+            { text: job.data.rawText, telegramMessageId: messageId },
+            coachChatDeps
+          );
+          break;
+
+        // Apply/Keep buttons under a coach-chat suggestion
+        case COACH_APPLY_COMMAND:
+          response = await handleCoachAnswer(user, args[0], 'apply', coachAnswerDeps);
+          break;
+
+        case COACH_KEEP_COMMAND:
+          response = await handleCoachAnswer(user, args[0], 'keep', coachAnswerDeps);
+          break;
+
         case 'unknown':
         default:
           response = handleUnknown();
@@ -452,6 +510,7 @@ async function shutdown() {
   logger.info('Shutting down worker...');
   await Promise.all([worker.close(), syncWorker.close()]);
   await syncQueue.close();
+  redis.disconnect();
   await prisma.$disconnect();
   process.exit(0);
 }

@@ -8,3 +8,4 @@ export * from './workout';
 export * from './planned-session';
 export * from './season';
 export * from './season-wizard';
+export * from './coach-chat';
