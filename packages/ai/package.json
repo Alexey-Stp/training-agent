@@ -4,12 +4,13 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc -b",
-    "typecheck": "tsc -b --noEmit",
+    "build": "tsc -b && node scripts/copy-prompts.mjs",
+    "typecheck": "tsc -b",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@triathlon/core": "*",
     "zod": "^4.3.6"
   },
   "devDependencies": {

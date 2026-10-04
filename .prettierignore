@@ -7,3 +7,5 @@ coverage
 .env.*
 package-lock.json
 pnpm-lock.yaml
+# Rendered-prompt snapshots are written by vitest and must stay byte-identical
+**/__snapshots__/**

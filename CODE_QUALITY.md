@@ -31,6 +31,7 @@ SonarQube scans this repo, including `test/` directories, which ESLint ignores. 
 
 - **Always pass a compare function to `.sort()`**, e.g. `(a, b) => a.localeCompare(b)`, even for `yyyy-MM-dd` strings.
 - **Last element:** use `arr.at(-1)`, not `arr[arr.length - 1]`. Needing the first and last date of rows is common, so reuse `dateRange()` from `apps/worker/src/plan-store.ts`.
+- **Last match:** use `arr.findLast(pred)`, not `arr.filter(pred).at(-1)`. `findLast` is ES2023, but the base tsconfig `lib` is ES2022, so add `"ES2023.Array"` to the package's `lib`, as `packages/ai/tsconfig.json` does.
 - **Membership checks on a fixed list use a `Set`.** Check with `.has()`, not `array.includes()`:
 
   ```ts
@@ -41,6 +42,7 @@ SonarQube scans this repo, including `test/` directories, which ESLint ignores. 
 ## Expressions and strings
 
 - **Optional chaining:** write `row?.x !== y` instead of `!row || row.x !== y`. TypeScript still narrows `row` after it.
+- **Replace all:** use `s.replaceAll('\r\n', '\n')`, not `s.replace(/\r\n/g, '\n')`. Keep a regex only for real patterns, and `replaceAll` with a regex still needs the `g` flag.
 - **No nested template literals.** Build the inner part first, then join an array of lines:
 
   ```ts
