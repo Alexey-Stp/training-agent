@@ -638,44 +638,29 @@ export const coachChatRepo: CoachChatRepo = {
   },
 };
 
-/** One write of an applied coach decision; the rows it touches get `coachDecisionId`. */
-function writeCoachPatch(
+type RowPatch = Exclude<CoachPatch, { kind: 'tombstone' }>;
+type TombstonePatch = Extract<CoachPatch, { kind: 'tombstone' }>;
+
+/** An update or cancel of an existing row; the row gets `coachDecisionId`. */
+function writeRowPatch(
   tx: Prisma.TransactionClient,
   userId: string,
   coachDecisionId: string,
-  patch: CoachPatch,
+  patch: RowPatch,
   now: Date
 ) {
-  switch (patch.kind) {
-    case 'update':
-      return tx.plannedSession.update({
-        where: { id: patch.id, userId },
-        data: {
+  const data =
+    patch.kind === 'cancel'
+      ? { deletedAt: now, coachDecisionId }
+      : {
           date: patch.session.date,
           slot: patch.session.slot,
           ...plannedSessionContent(patch.session),
-          status: 'draft',
+          status: 'draft' as const,
           deletedAt: null,
           coachDecisionId,
-        },
-      });
-    case 'cancel':
-      return tx.plannedSession.update({
-        where: { id: patch.id, userId },
-        data: { deletedAt: now, coachDecisionId },
-      });
-    case 'tombstone':
-      return tx.plannedSession.create({
-        data: {
-          userId,
-          date: patch.session.date,
-          slot: patch.session.slot,
-          ...plannedSessionContent(patch.session),
-          deletedAt: now,
-          coachDecisionId,
-        },
-      });
-  }
+        };
+  return tx.plannedSession.update({ where: { id: patch.id, userId }, data });
 }
 
 export const coachAnswerRepo: CoachAnswerRepo = {
@@ -712,9 +697,21 @@ export const coachAnswerRepo: CoachAnswerRepo = {
         data: { accepted: true, answeredAt: now },
       });
       if (count === 0) return false;
-      // In order: a moved session frees its (date, slot) before its tombstone takes it
-      for (const patch of patches) {
-        await writeCoachPatch(tx, userId, decisionId, patch, now);
+      // Rows first: a moved session frees its (date, slot) before its tombstone takes it
+      const rows = patches.filter((p): p is RowPatch => p.kind !== 'tombstone');
+      const tombstones = patches.filter((p): p is TombstonePatch => p.kind === 'tombstone');
+      await Promise.all(rows.map((p) => writeRowPatch(tx, userId, decisionId, p, now)));
+      if (tombstones.length > 0) {
+        await tx.plannedSession.createMany({
+          data: tombstones.map(({ session }) => ({
+            userId,
+            date: session.date,
+            slot: session.slot,
+            ...plannedSessionContent(session),
+            deletedAt: now,
+            coachDecisionId: decisionId,
+          })),
+        });
       }
       return true;
     });
