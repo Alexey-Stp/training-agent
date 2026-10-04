@@ -38,7 +38,7 @@ export function loadPromptTemplate(name: string): string {
   let template = cache.get(name);
   if (template === undefined) {
     const file = join(__dirname, '..', 'prompts', `${name}.md`);
-    template = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+    template = readFileSync(file, 'utf8').replaceAll('\r\n', '\n');
     cache.set(name, template);
   }
   return template;

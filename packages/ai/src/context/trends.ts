@@ -110,7 +110,7 @@ export function wellnessTrend(rows: WellnessDay[], date: string): WellnessTrend 
 
 /** CTL/ATL/TSB of the latest row on or before `date` that has TSB, or null when none has. */
 export function trainingLoad(rows: WellnessDay[], date: string): TrainingLoad | null {
-  const latest = rows.filter((row) => row.date <= date && row.tsb !== null).at(-1);
+  const latest = rows.findLast((row) => row.date <= date && row.tsb !== null);
   if (!latest) return null;
   return {
     date: latest.date,
