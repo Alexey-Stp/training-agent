@@ -241,6 +241,16 @@ Known limitation: per-week `SeasonWeek` targets aren't stored, so published week
 
 The prompt is deterministic: the same data gives a byte-identical prompt. Missing data is stated ("no device data") rather than left out. If the prompt exceeds `AI_CONTEXT_TOKEN_BUDGET` (default 6000, estimated at 4 characters per token), the oldest training history days are dropped first, then the oldest coach decisions, then wellness trend days. Races, key sessions and upcoming sessions are always kept. Snapshot tests of three fixture athletes live in `packages/ai/test/context/__snapshots__/`.
 
+### Coach suggestions
+
+`runCoachSuggestion` sends the daily context to the LLM and asks for a structured `CoachSuggestion`: an assessment, an action (`keep`, `reduce`, `swap`, `move` or `rest`), field-level session changes, a confidence and a message for the athlete. An invalid reply gets one repair attempt. Every suggestion then passes deterministic guardrails:
+
+- no session loses more than 50% in one change (cancelling needs action `rest`);
+- no sessions moved onto rest days, and no intensity increases when readiness is 2/5 or lower;
+- no new hard-hard days, low-readiness hard sessions or weekly load cap breaches (the core rules engine checks the patched plan).
+
+A suggestion that breaks a hard rule, or an LLM that is down or answers invalid JSON twice, falls back to the rules engine's own recommendation. Every run, whatever its outcome, is stored as a `CoachDecision` row for audit. No new env vars; the limits are in `DEFAULT_GUARDRAIL_CONFIG`.
+
 ## intervals.icu Integration
 
 `packages/integrations-icu` (`@triathlon/integrations-icu`) is a typed REST client for [intervals.icu](https://intervals.icu). The worker uses it to validate credentials in `/connect icu` and to sync activities and wellness.

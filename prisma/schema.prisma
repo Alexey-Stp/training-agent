@@ -20,6 +20,7 @@ model User {
   races             Race[]
   seasonPlans       SeasonPlan[]
   llmCallLogs       LlmCallLog[]
+  coachDecisions    CoachDecision[]
 
   @@index([telegramId])
 }
@@ -291,4 +292,50 @@ model LlmCallLog {
 
   @@index([purpose, createdAt])
   @@index([userId, createdAt])
+}
+
+enum CoachDecisionSource {
+  llm
+  repaired
+  fallback
+}
+
+enum GuardrailVerdict {
+  accept
+  clamp
+  reject
+}
+
+enum CoachAction {
+  keep
+  reduce
+  swap
+  move
+  rest
+}
+
+// One row per daily coaching run, whatever its outcome (packages/ai suggestion/run.ts)
+model CoachDecision {
+  id                      String              @id @default(cuid())
+  userId                  String
+  user                    User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date                    String // YYYY-MM-DD in the athlete's local time
+  promptVersion           String // daily context prompt
+  suggestionPromptVersion String
+  contextHash             String // sha256 of the prompt sent to the LLM
+  source                  CoachDecisionSource
+  fallbackReason          String? // llm_unavailable | invalid_output | guardrail_reject | internal_error
+  attempts                Int // LLM calls made, at most 2
+  rawResponses            Json // string[], one per LLM reply
+  suggestion              Json? // parsed CoachSuggestion, before guardrails
+  verdict                 GuardrailVerdict? // NULL when no suggestion reached the guardrails
+  reasons                 Json // string[]
+  finalAction             CoachAction
+  finalChanges            Json // SessionDiff[]
+  summary                 String
+  athleteMessage          String
+  accepted                Boolean? // the athlete's answer; NULL until answered
+  createdAt               DateTime            @default(now())
+
+  @@index([userId, date])
 }
