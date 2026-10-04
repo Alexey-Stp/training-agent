@@ -517,7 +517,34 @@ The first building block is `buildDailyContext` in `packages/ai/src/context/`:
 3. `render.ts` formats each section with fixed numeric precision and states missing data explicitly. `template.ts` fills `{{placeholder}}`s in `src/prompts/daily-v1.md` (copied to `dist/prompts` at build) and fails on unknown or unused placeholders.
 4. `budget.ts` truncates to the token budget: oldest history, then decisions, then trend days.
 
-The template name doubles as the `promptVersion` logged with each LLM call. To change the prompt, add `daily-v2.md` rather than editing v1. `CoachDecision` only exists as a repository interface so far; its table arrives with the ticket that records decisions.
+The template name doubles as the `promptVersion` logged with each LLM call. To change the prompt, add `daily-v2.md` rather than editing v1.
+
+### Coach suggestions and guardrails (implemented)
+
+`runCoachSuggestion` in `packages/ai/src/suggestion/` turns the daily context into a safe recommendation:
+
+```
+daily prompt + suggestion-v1.md (answer format, limits, sessions by id)
+        │
+        ▼
+LLM (structured output: CoachSuggestion) ── invalid JSON/schema ──► one repair call (prompt + bad reply + error)
+        │                                                                 │ still invalid
+        │ timeout / 5xx / auth / refusal                                  ▼
+        ├────────────────────────────────────────────────────────► rules-engine fallback
+        ▼                                                                 ▲
+guardrails: integrity ─ reject ───────────────────────────────────────────┤
+            clamps (≤50% cut, no moves onto rest days,                    │
+                    no intensity increases at readiness ≤2)               │
+            checkHardRules on the patched plan ─ new violation ───────────┘
+        │ accept / clamp
+        ▼
+CoachDecision row (always exactly one per run)
+```
+
+- `schema.ts`: zod `CoachSuggestion` (`assessment`, `action` keep|reduce|swap|move|rest, `changes: SessionDiff[]`, `confidence` 0..1, `athleteMessage`). A `SessionDiff` is one field (`durationMin`, `intensity`, `date` or `sport`) of one session, with `before`/`after`. `sessionId` is the natural key `<date>/<slot>`. `coachSuggestionJsonSchema()` strips keywords structured outputs rejects (`minimum`, `pattern`, ...); zod still enforces them.
+- `parse.ts`: `requestSuggestion` makes at most two calls. A reply that fails JSON or schema validation (or a provider `LlmContractError`) gets exactly one repair call. Any other provider error means the LLM is unavailable, and no repair call is made.
+- `guardrails.ts`: `runGuardrails` is pure and works on a clone. Integrity problems (unknown session, stale `before`, past or locked session, duplicate field) reject. Per-change limits clamp. Hard-rule violations the change introduced (`checkHardRules`: NoHardHard, ReadinessDownshift, WeeklyLoadCap) reject; violations the plan already had are not blamed on the LLM. Limits live in `DEFAULT_GUARDRAIL_CONFIG`. `deterministicRecommendation` is the rules-engine-only fallback: `applyRules` on the window, keeping only downgrades and reductions.
+- `run.ts`: an accepted suggestion keeps the LLM's message. Clamped and fallback outcomes get a deterministic message that lists the final changes and why. Every run writes one `CoachDecision` (context hash, raw replies, parsed suggestion, verdict, reasons, final action and changes); only a failing write throws, so BullMQ retries. The worker's `coachDecisionRepo` also serves `DailyContextDeps.decisions`.
 
 ## Security Considerations
 

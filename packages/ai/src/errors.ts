@@ -60,7 +60,9 @@ export class LlmHttpError extends LlmError {
 export class LlmContractError extends LlmError {
   constructor(
     message: string,
-    public readonly detail: unknown
+    public readonly detail: unknown,
+    /** The model's reply, when it was the reply that broke the contract */
+    public readonly rawText: string | null = null
   ) {
     super(message);
     this.name = 'LlmContractError';

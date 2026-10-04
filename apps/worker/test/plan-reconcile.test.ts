@@ -95,7 +95,7 @@ describe('reconcilePlannedSessions', () => {
   it('ignores whitespace-only differences in the description', async () => {
     const id = eventOf('2026-10-01', Sport.bike);
     const description = icu.events.get(id)!.description!;
-    icu.edit(id, { description: `${description.replace(/\n/g, '\r\n')}  \n` });
+    icu.edit(id, { description: `${description.replaceAll('\n', '\r\n')}  \n` });
 
     expect(await reconcilePlannedSessions(USER_ID, deps)).toMatchObject({ flagged: 0 });
   });

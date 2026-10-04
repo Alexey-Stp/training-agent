@@ -7,3 +7,4 @@ export * from './mock-provider';
 export * from './call-log';
 export * from './factory';
 export * from './context';
+export * from './suggestion';

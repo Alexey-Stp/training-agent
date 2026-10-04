@@ -1,3 +1,4 @@
+import { LlmContractError } from './errors';
 import type { CompleteOptions, LlmProvider, LlmResult } from './types';
 
 export type MockResponder = (prompt: string, opts: CompleteOptions) => string | Partial<LlmResult>;
@@ -53,7 +54,16 @@ export class MockProvider implements LlmProvider {
       },
       ...partial,
     };
-    if (opts.jsonSchema && result.json === undefined) result.json = JSON.parse(text) as unknown;
+    if (opts.jsonSchema && result.json === undefined) result.json = parseJson(text);
     return result;
+  }
+}
+
+/** Same contract as AnthropicProvider: a structured reply that isn't JSON is a contract error. */
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (error) {
+    throw new LlmContractError('Structured output is not valid JSON', error, text);
   }
 }

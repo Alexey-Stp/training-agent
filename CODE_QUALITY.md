@@ -43,6 +43,8 @@ SonarQube scans this repo, including `test/` directories, which ESLint ignores. 
 
 - **Optional chaining:** write `row?.x !== y` instead of `!row || row.x !== y`. TypeScript still narrows `row` after it.
 - **Replace all:** use `s.replaceAll('\r\n', '\n')`, not `s.replace(/\r\n/g, '\n')`. Keep a regex only for real patterns, and `replaceAll` with a regex still needs the `g` flag.
+  - A regex that only matches fixed text is not a real pattern, even when a character needs escaping. Write `key.replaceAll('|', ' ')`, not `key.replace(/\|/g, ' ')`. The same goes for `/\./g`, `/-/g` and `/\n/g`.
+  - `s.replace('|', ' ')` with a string argument replaces only the first match. To replace every match, use `replaceAll`.
 - **No nested template literals.** Build the inner part first, then join an array of lines:
 
   ```ts

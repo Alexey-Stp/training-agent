@@ -8,7 +8,7 @@ import {
   TrainingBlockType,
 } from '@triathlon/core';
 import type { PlannedSessionDraft, WorkoutBlock } from '@triathlon/core';
-import type { LlmCallLogSink } from '@triathlon/ai';
+import type { CoachDecision, CoachDecisionSink, LlmCallLogSink } from '@triathlon/ai';
 import { logger } from './logger';
 import type { IcuConnectionRepo } from './icu-connect';
 import type { ActivityRepo } from './activity-sync';
@@ -478,6 +478,45 @@ export const profileRepo: ProfileRepo = {
 export const llmCallLogRepo: LlmCallLogSink = {
   async write(entry) {
     await prisma.llmCallLog.create({ data: entry });
+  },
+};
+
+function toJson(value: unknown): Prisma.InputJsonValue {
+  return value as Prisma.InputJsonValue;
+}
+
+export interface CoachDecisionRepo extends CoachDecisionSink {
+  /** The latest `limit` decisions dated on or before `upTo`, as the daily context shows them */
+  listRecent(userId: string, upTo: string, limit: number): Promise<CoachDecision[]>;
+}
+
+export const coachDecisionRepo: CoachDecisionRepo = {
+  async write(record) {
+    await prisma.coachDecision.create({
+      data: {
+        ...record,
+        rawResponses: toJson(record.rawResponses),
+        // undefined leaves the column NULL; Prisma rejects a plain null for Json
+        suggestion: record.suggestion === null ? undefined : toJson(record.suggestion),
+        reasons: toJson(record.reasons),
+        finalChanges: toJson(record.finalChanges),
+      },
+    });
+  },
+
+  async listRecent(userId, upTo, limit) {
+    const rows = await prisma.coachDecision.findMany({
+      where: { userId, date: { lte: upTo } },
+      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+      take: limit,
+      select: { date: true, finalAction: true, summary: true, accepted: true },
+    });
+    return rows.map((r) => ({
+      date: r.date,
+      kind: r.finalAction,
+      summary: r.summary,
+      accepted: r.accepted,
+    }));
   },
 };
 

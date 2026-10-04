@@ -76,11 +76,11 @@ function toUsage(usage: AnthropicResponse['usage']): LlmUsage {
   };
 }
 
-function parseJson(text: string, what: string): unknown {
+function parseJson(text: string, what: string, rawText: string | null = null): unknown {
   try {
     return JSON.parse(text) as unknown;
   } catch (error) {
-    throw new LlmContractError(`${what} is not valid JSON`, error);
+    throw new LlmContractError(`${what} is not valid JSON`, error, rawText);
   }
 }
 
@@ -187,7 +187,7 @@ export class AnthropicProvider implements LlmProvider {
       model: response.model,
       stopReason: response.stop_reason ?? 'unknown',
     };
-    if (opts.jsonSchema) result.json = parseJson(text, 'Structured output');
+    if (opts.jsonSchema) result.json = parseJson(text, 'Structured output', text);
     return result;
   }
 }
