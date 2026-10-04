@@ -136,7 +136,7 @@ function integrityIssues(input: GuardrailInput, config: GuardrailConfig): string
   const keys = input.suggestion.changes.map((d) => d.sessionId + '|' + d.field);
   const duplicates = keys
     .filter((key, i) => keys.indexOf(key) !== i)
-    .map((key) => 'More than one change to ' + key.replace(/\|/g, ' '));
+    .map((key) => 'More than one change to ' + key.replaceAll('|', ' '));
   const issues = input.suggestion.changes.map((d) =>
     diffIntegrityIssue(d, byId.get(d.sessionId), input.date, config)
   );
