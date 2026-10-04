@@ -260,6 +260,17 @@ Any message that isn't a `/command` goes to the coach. The worker answers it wit
 - **Medical boundary.** The system prompt (`prompts/chat-system-v1.md`) makes the coach say "I'm not a doctor" for pain, injury, illness or medication questions, keep to general guidance and recommend a professional.
 - **Limit.** `COACH_CHAT_DAILY_LIMIT` messages (default 30) per athlete per local day, counted in Redis. Over it, the athlete gets a polite notice and no LLM call is made.
 
+### Morning brief
+
+Every linked athlete gets one brief a day at `Profile.briefTime` in their own timezone (default `DAILY_BRIEF_DEFAULT_TIME`, 06:30). The worker syncs wellness and activities from intervals.icu, builds the daily context, asks the coach for a suggestion (guardrails as above) and sends the brief: today's sessions and the coach's message, with **✅ Apply** / **↩️ Keep my plan** buttons when the coach proposes a change.
+
+- **One per day.** Each run is keyed on the athlete and local date (`DailyBriefRun`), so a second trigger the same day sends nothing. DST changes move the UTC time, not the local one.
+- **intervals.icu down.** The brief still goes out with `⚠️ intervals.icu unavailable: data as of <last sync>`.
+- **LLM down.** The brief carries the rules engine's recommendation, and the `CoachDecision` is stored with `source = fallback`.
+- **Telegram down.** The job retries the send up to 3 times without syncing or asking the coach again. A bot the athlete blocked is not retried.
+
+Set `DAILY_BRIEF_ENABLED=false` to turn it off; the worker then removes the schedulers on startup.
+
 ## intervals.icu Integration
 
 `packages/integrations-icu` (`@triathlon/integrations-icu`) is a typed REST client for [intervals.icu](https://intervals.icu). The worker uses it to validate credentials in `/connect icu` and to sync activities and wellness.

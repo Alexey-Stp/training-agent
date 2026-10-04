@@ -34,6 +34,8 @@ import {
   coachChatRepo,
   coachAnswerRepo,
   dailyContextDeps,
+  briefProfileRepo,
+  dailyBriefRunRepo,
 } from './db';
 import {
   handleStart,
@@ -52,8 +54,8 @@ import {
   handleDisconnectIcu,
   type IcuConnectDeps,
 } from './icu-connect';
-import { processSyncJob, type ActivitySyncDeps } from './activity-sync';
-import { processWellnessSyncJob, type WellnessSyncDeps } from './wellness-sync';
+import { processSyncJob, syncActivities, type ActivitySyncDeps } from './activity-sync';
+import { processWellnessSyncJob, syncWellness, type WellnessSyncDeps } from './wellness-sync';
 import { handleSync, type SyncCommandDeps } from './sync-command';
 import type { PlanPushCommandDeps } from './plan-command';
 import type { PlanStoreDeps } from './plan-store';
@@ -82,6 +84,15 @@ import {
   reconcileSchedulers,
   type IcuSyncJobSpec,
 } from './sync-scheduler';
+import {
+  DAILY_BRIEF_QUEUE,
+  combineSchedulers,
+  createDailyBriefScheduler,
+  reconcileDailyBriefSchedulers,
+  type DailyBriefJob,
+  type DailyBriefSchedulerDeps,
+} from './daily-loop/scheduler';
+import { runDailyBrief, type DailyBriefDeps } from './daily-loop/pipeline';
 
 const config = getConfig();
 
@@ -105,6 +116,14 @@ const syncJobs: IcuSyncJobSpec[] = [
 ];
 const syncQueue = new Queue<IcuSyncJob>(ICU_SYNC_QUEUE, { connection: redisConnection });
 const icuSyncScheduler = createIcuSyncScheduler(syncQueue, syncJobs);
+
+// Morning brief: per linked athlete, one cron scheduler at the local Profile.briefTime
+const briefSchedulerDeps: DailyBriefSchedulerDeps = {
+  profiles: briefProfileRepo,
+  defaultTime: config.DAILY_BRIEF_DEFAULT_TIME,
+};
+const briefQueue = new Queue<DailyBriefJob>(DAILY_BRIEF_QUEUE, { connection: redisConnection });
+const dailyBriefScheduler = createDailyBriefScheduler(briefQueue, briefSchedulerDeps);
 
 const activitySyncDeps: ActivitySyncDeps = {
   repo: activityRepo,
@@ -218,7 +237,9 @@ const icuConnectDeps: IcuConnectDeps = {
   repo: icuConnectionRepo,
   keys: encKeys,
   createClient: (athleteId, apiKey) => new IcuClient({ athleteId, apiKey }),
-  scheduler: icuSyncScheduler,
+  scheduler: config.DAILY_BRIEF_ENABLED
+    ? combineSchedulers(icuSyncScheduler, dailyBriefScheduler)
+    : icuSyncScheduler,
   onSchedulerError: (error, userId) => {
     logger.error({ error, userId }, 'Failed to update intervals.icu sync schedule');
   },
@@ -493,10 +514,54 @@ syncWorker.on('error', (err) => {
   logger.error({ error: err }, 'Sync worker error');
 });
 
+const dailyBriefDeps: DailyBriefDeps = {
+  runs: dailyBriefRunRepo,
+  profiles: briefProfileRepo,
+  syncWellness: (userId) => syncWellness(userId, wellnessSyncDeps),
+  syncActivities: (userId) => syncActivities(userId, activitySyncDeps),
+  connections: icuConnectionRepo,
+  context: dailyContextDeps,
+  getRulesContext,
+  provider: llmProvider,
+  decisions: coachDecisionRepo,
+  tokenBudget: aiConfig.AI_CONTEXT_TOKEN_BUDGET,
+  sendMessage: (chatId, text, options) => api.sendMessage(chatId, text, options),
+  logger,
+  now: () => new Date(),
+};
+
+const briefWorker = config.DAILY_BRIEF_ENABLED
+  ? new Worker<DailyBriefJob>(
+      DAILY_BRIEF_QUEUE,
+      (job: Job<DailyBriefJob>) => runDailyBrief(job.data.userId, dailyBriefDeps),
+      { connection: redisConnection, concurrency: 2 }
+    )
+  : null;
+
+briefWorker?.on('failed', (job, err) => {
+  logger.error(
+    { jobId: job?.id, userId: job?.data.userId, attempt: job?.attemptsMade, error: err },
+    'Daily brief failed'
+  );
+});
+
+briefWorker?.on('error', (err) => {
+  logger.error({ error: err }, 'Daily brief worker error');
+});
+
 async function startIcuSync() {
   const userIds = await activityRepo.listConnectedUserIds();
   const result = await reconcileSchedulers(syncQueue, icuSyncScheduler, userIds, syncJobs);
   logger.info(result, 'intervals.icu sync schedules reconciled');
+  // Disabled: no athlete is connected as far as the brief is concerned, so every scheduler goes
+  const briefUserIds = config.DAILY_BRIEF_ENABLED ? userIds : [];
+  const brief = await reconcileDailyBriefSchedulers(
+    briefQueue,
+    dailyBriefScheduler,
+    briefUserIds,
+    briefSchedulerDeps
+  );
+  logger.info(brief, 'Daily brief schedules reconciled');
 }
 
 startIcuSync().catch((error: unknown) => {
@@ -508,8 +573,8 @@ logger.info('Worker started and listening for jobs...');
 // Graceful shutdown
 async function shutdown() {
   logger.info('Shutting down worker...');
-  await Promise.all([worker.close(), syncWorker.close()]);
-  await syncQueue.close();
+  await Promise.all([worker.close(), syncWorker.close(), briefWorker?.close()]);
+  await Promise.all([syncQueue.close(), briefQueue.close()]);
   redis.disconnect();
   await prisma.$disconnect();
   process.exit(0);

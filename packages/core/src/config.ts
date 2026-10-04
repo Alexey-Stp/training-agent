@@ -5,6 +5,9 @@ const encKeySchema = z
   .string()
   .refine(isValidEncKey, 'must be base64 of 32 bytes (openssl rand -base64 32)');
 
+/** `HH:mm`, 24h: Profile.briefTime and DAILY_BRIEF_DEFAULT_TIME */
+export const BRIEF_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   DATABASE_URL: z.string().url(),
@@ -30,6 +33,12 @@ const envSchema = z.object({
   SEASON_PUBLISH_WINDOW_DAYS: z.coerce.number().int().min(1).max(28).default(14),
   // Free-form coach chat: messages per athlete per local day before the limit notice
   COACH_CHAT_DAILY_LIMIT: z.coerce.number().int().positive().default(30),
+  // Morning brief: one pipeline run per linked athlete at Profile.briefTime (local time)
+  DAILY_BRIEF_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  DAILY_BRIEF_DEFAULT_TIME: z.string().regex(BRIEF_TIME_RE, 'must be HH:mm (24h)').default('06:30'),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
