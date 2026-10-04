@@ -22,6 +22,7 @@ model User {
   llmCallLogs       LlmCallLog[]
   coachDecisions    CoachDecision[]
   coachChatMessages CoachChatMessage[]
+  dailyBriefRuns    DailyBriefRun[]
 
   @@index([telegramId])
 }
@@ -36,6 +37,7 @@ model Profile {
   bikeVo2Day    String   @default("Thu")
   longBikeDay   String   @default("Sun")
   noLongRunDay  String   @default("Sun")
+  briefTime     String? // HH:mm local time of the morning brief; NULL uses DAILY_BRIEF_DEFAULT_TIME
   updatedAt     DateTime @updatedAt
 
   @@index([userId])
@@ -369,4 +371,33 @@ model CoachChatMessage {
 
   @@unique([userId, telegramMessageId, role])
   @@index([userId, createdAt])
+}
+
+enum DailyBriefStatus {
+  pending
+  running
+  sent
+  failed
+}
+
+// One morning pipeline run per athlete and local day (apps/worker daily-loop/pipeline.ts)
+model DailyBriefRun {
+  id              String           @id @default(cuid())
+  userId          String
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date            String // YYYY-MM-DD in the athlete's local time
+  status          DailyBriefStatus @default(pending)
+  startedAt       DateTime? // lease of the run in progress
+  coachDecisionId String?
+  briefText       String? // rendered brief (Telegram HTML); a retry resends it
+  briefKeyboard   Json? // InlineButton[][] sent with the brief
+  stale           Boolean          @default(false) // an ICU sync failed, data as of dataAsOf
+  dataAsOf        DateTime?
+  stageTimings    Json             @default("{}") // stage → ms
+  error           String?
+  sentAt          DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@unique([userId, date])
 }

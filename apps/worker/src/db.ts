@@ -1,4 +1,9 @@
-import { PrismaClient, type PlannedSession, type Prisma } from '@prisma/client';
+import {
+  PrismaClient,
+  type DailyBriefRun as DailyBriefRunRow,
+  type PlannedSession,
+  type Prisma,
+} from '@prisma/client';
 import {
   Intensity,
   RacePriority,
@@ -31,6 +36,9 @@ import { toUserProfile } from './profile';
 import type { CoachChatRepo } from './coach-chat-command';
 import type { CoachAnswerRepo } from './coach-apply';
 import type { CoachPatch } from './coach-plan';
+import type { InlineButton } from './reply';
+import type { DailyBriefRun, DailyBriefRunRepo, StageTimings } from './daily-loop/run-store';
+import type { BriefProfileRepo } from './daily-loop/scheduler';
 import {
   WELLNESS_DEVICE_FIELDS,
   type WellnessDeviceField,
@@ -726,3 +734,81 @@ export async function loadTrainingHours(userId: string, from: string, to: string
   });
   return (_sum.durationSec ?? 0) / 3600;
 }
+
+export const briefProfileRepo: BriefProfileRepo = {
+  async findBriefProfile(userId) {
+    const row = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { telegramId: true, profile: { select: { timezone: true, briefTime: true } } },
+    });
+    if (!row?.profile) return null;
+    return {
+      telegramChatId: Number(row.telegramId),
+      timezone: row.profile.timezone,
+      briefTime: row.profile.briefTime,
+    };
+  },
+};
+
+function toDailyBriefRun(row: DailyBriefRunRow): DailyBriefRun {
+  return {
+    id: row.id,
+    status: row.status,
+    coachDecisionId: row.coachDecisionId,
+    briefText: row.briefText,
+    briefKeyboard: row.briefKeyboard as InlineButton[][] | null,
+    stale: row.stale,
+    dataAsOf: row.dataAsOf,
+    stageTimings: row.stageTimings as StageTimings,
+  };
+}
+
+export const dailyBriefRunRepo: DailyBriefRunRepo = {
+  async claim(userId, date, now, leaseMs) {
+    // skipDuplicates: the (userId, date) row may exist from an earlier trigger or attempt
+    await prisma.dailyBriefRun.createMany({ data: [{ userId, date }], skipDuplicates: true });
+    // One conditional update takes the run over, so two concurrent triggers can't both win
+    const { count } = await prisma.dailyBriefRun.updateMany({
+      where: {
+        userId,
+        date,
+        OR: [
+          { status: { in: ['pending', 'failed'] } },
+          { status: 'running', startedAt: { lt: new Date(now.getTime() - leaseMs) } },
+        ],
+      },
+      data: { status: 'running', startedAt: now, error: null },
+    });
+    const row = await prisma.dailyBriefRun.findUniqueOrThrow({
+      where: { userId_date: { userId, date } },
+    });
+    if (count > 0) return { status: 'claimed', run: toDailyBriefRun(row) };
+    return { status: row.status === 'sent' ? 'already_sent' : 'in_progress' };
+  },
+
+  async saveBrief(id, brief) {
+    await prisma.dailyBriefRun.update({
+      where: { id },
+      data: {
+        ...brief,
+        // undefined leaves the column NULL; Prisma rejects a plain null for Json
+        briefKeyboard: brief.briefKeyboard === null ? undefined : toJson(brief.briefKeyboard),
+        stageTimings: toJson(brief.stageTimings),
+      },
+    });
+  },
+
+  async markSent(id, sentAt, stageTimings) {
+    await prisma.dailyBriefRun.update({
+      where: { id },
+      data: { status: 'sent', sentAt, error: null, stageTimings: toJson(stageTimings) },
+    });
+  },
+
+  async markFailed(id, error, stageTimings) {
+    await prisma.dailyBriefRun.update({
+      where: { id },
+      data: { status: 'failed', error, stageTimings: toJson(stageTimings) },
+    });
+  },
+};

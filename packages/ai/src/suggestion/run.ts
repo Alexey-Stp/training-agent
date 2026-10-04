@@ -161,6 +161,15 @@ export async function runCoachSuggestion(
     outcome = fallback(input, config, 'internal_error', audit, [RULES_ONLY_NOTE]);
   }
 
+  return writeDecision(deps, input, prompt, outcome);
+}
+
+async function writeDecision(
+  deps: RunCoachSuggestionDeps,
+  input: RulesFallbackInput,
+  prompt: string,
+  outcome: Outcome
+): Promise<CoachDecisionRecord> {
   const record: CoachDecisionRecord = {
     userId: input.userId,
     origin: 'daily',
@@ -173,4 +182,21 @@ export async function runCoachSuggestion(
   };
   await deps.decisions.write(record);
   return record;
+}
+
+export type RulesFallbackInput = Omit<RunCoachSuggestionInput, 'dailyPrompt'>;
+
+/**
+ * A daily decision from the rules engine alone, without an LLM call: for when the daily context
+ * couldn't be built. Writes exactly one decision (`source: 'fallback'`); only the write throws.
+ */
+export function runRulesFallback(
+  deps: RunCoachSuggestionDeps,
+  input: RulesFallbackInput,
+  reason: FallbackReason
+): Promise<CoachDecisionRecord> {
+  const config = deps.guardrailConfig ?? DEFAULT_GUARDRAIL_CONFIG;
+  const audit: Audit = { ...auditOf(null), verdict: null, reasons: [] };
+  const outcome = fallback({ ...input, dailyPrompt: '' }, config, reason, audit, [RULES_ONLY_NOTE]);
+  return writeDecision(deps, input, '', outcome);
 }

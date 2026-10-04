@@ -580,6 +580,39 @@ coach_apply / coach_keep job (jobId per tapped message)
 - `PlannedSession.coachDecisionId` protects applied changes: `diffPlan` treats such rows like `modified_externally`, so `/plan` and the season publisher neither overwrite nor recreate them. Push deletes a coach tombstone's ICU event but keeps the row, and skips coach tombstones that have no event.
 - Rate limit: a Redis set per user and local day holds message ids, so a retried job counts once. `COACH_CHAT_DAILY_LIMIT` (core config, default 30).
 
+### Morning brief (implemented)
+
+```
+daily-brief queue: one cron scheduler per linked athlete
+  key daily-brief:<userId>, pattern from Profile.briefTime (?? DAILY_BRIEF_DEFAULT_TIME), tz Profile.timezone
+        │ fires at the local time (BullMQ cron-parser handles DST)
+        ▼
+runDailyBrief (apps/worker/src/daily-loop/pipeline.ts)
+  date = localToday(now, timezone)
+  claim DailyBriefRun (userId, date) ─ sent ─► skip ─ running within lease ─► BriefInProgressError (retry)
+  brief already stored (retry after a failed send)? ─ yes ─► send it
+  wellness sync ─┐ throws ─► stale, data as of the failed sync's cursor
+  activity sync ─┘
+  context: buildDailyContext ‖ plan today..+6 ‖ RulesContext   (context throws ─► rules only)
+  suggest: runCoachSuggestion (LLM + guardrails, fallback inside) or runRulesFallback ─► one CoachDecision
+  save brief text + buttons + decision id on the run
+  send ─ fails ─► run failed, rethrow (job attempts: 3; 403/400 ─► UnrecoverableError)
+  run sent
+```
+
+| Stage failure                               | Result                                                                                                      |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| wellness or activity sync                   | brief sent with `⚠️ intervals.icu unavailable: data as of <cursor>` (`never synced` without one)            |
+| context build                               | `runRulesFallback`: rules engine only, `CoachDecision.source = fallback`, `fallbackReason = internal_error` |
+| LLM (down, invalid twice, guardrail reject) | rules-engine fallback inside `runCoachSuggestion`, `source = fallback`                                      |
+| plan or RulesContext read                   | run marked failed, job retried                                                                              |
+| Telegram send                               | run marked failed, job retried (3 attempts); the retry resends the stored brief                             |
+
+- **Scheduling** (`daily-loop/scheduler.ts`). `createDailyBriefScheduler` is combined with the ICU sync scheduler (`combineSchedulers`), so connect/disconnect add and remove it. `reconcileDailyBriefSchedulers` runs at startup and reschedules athletes whose `pattern` or `tz` changed. A cron scheduler doesn't fire on creation.
+- **Idempotency** (`DailyBriefRun`, unique `(userId, date)`, migration `9_daily_brief`). `claim` inserts the row (`skipDuplicates`) and takes it over with one conditional `updateMany`: pending or failed, or running with `startedAt` older than the 5-minute lease. The job backoff (2 and 4 minutes) outlasts the lease, so a retry after a crash takes the run over. Saving the brief and its decision id before sending means a retry never writes a second `CoachDecision`.
+- **Timings.** Every stage logs `{ userId, date, stage, ms, outcome }` (`daily brief stage`), and the run ends with one `daily brief finished` log. The timings of the latest attempt are stored in `DailyBriefRun.stageTimings`.
+- The pipeline takes its stages as injected deps (`syncWellness`, `syncActivities`, `sendMessage`, repos, `now`), so the tests need no Redis, Prisma, ICU or Telegram.
+
 ## Security Considerations
 
 ### Current Protections
