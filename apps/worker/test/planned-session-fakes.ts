@@ -72,11 +72,17 @@ export class MemoryPlanRepo implements PlanStoreRepo, PlanPushRepo, PlanReconcil
       pushedHash: null,
       externalChange: null,
       deletedAt: null,
+      coachDecisionId: null,
       updatedAt: this.tick(),
       ...fields,
     };
     this.rows.set(row.id, row);
     return this.copy(row);
+  }
+
+  /** Test helper: changes a stored row, bumping updatedAt like any write. */
+  update(id: string, fields: Partial<PlannedSessionRecord>): void {
+    Object.assign(this.rows.get(id)!, structuredClone(fields), { updatedAt: this.tick() });
   }
 
   findConnection(userId: string) {
@@ -114,7 +120,9 @@ export class MemoryPlanRepo implements PlanStoreRepo, PlanPushRepo, PlanReconcil
         (r) =>
           r.userId === userId &&
           r.date >= fromDate &&
-          (r.deletedAt !== null || r.status === 'draft')
+          (r.deletedAt !== null
+            ? r.coachDecisionId === null || r.icuEventId !== null
+            : r.status === 'draft')
       )
     );
   }
@@ -141,7 +149,7 @@ export class MemoryPlanRepo implements PlanStoreRepo, PlanPushRepo, PlanReconcil
 
   remove(read: PlannedSessionRecord) {
     const row = this.rows.get(read.id);
-    if (row?.deletedAt) this.rows.delete(read.id);
+    if (row?.deletedAt && row.coachDecisionId === null) this.rows.delete(read.id);
     else if (row)
       Object.assign(row, { icuEventId: null, pushedHash: null, updatedAt: this.tick() });
     return Promise.resolve();

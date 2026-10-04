@@ -251,6 +251,15 @@ The prompt is deterministic: the same data gives a byte-identical prompt. Missin
 
 A suggestion that breaks a hard rule, or an LLM that is down or answers invalid JSON twice, falls back to the rules engine's own recommendation. Every run, whatever its outcome, is stored as a `CoachDecision` row for audit. No new env vars; the limits are in `DEFAULT_GUARDRAIL_CONFIG`.
 
+### Coach chat
+
+Any message that isn't a `/command` goes to the coach. The worker answers it with the daily context, the plan for today and the next 6 days, and the last 10 chat messages (`CoachChatMessage`, both directions). Answers name the athlete's actual sessions and numbers.
+
+- **Plain answers.** A question like "why Z2?" gets a text answer and nothing else.
+- **Plan changes.** "Can I move the long ride to Saturday?" gets an answer plus a `CoachSuggestion` that goes through the same guardrails as above, then **✅ Apply** / **↩️ Keep my plan** buttons. Apply re-checks the change against the current plan, writes it (a move gets a free slot on the new day and keeps its intervals.icu event; a cancel tombstones the session), and pushes it to intervals.icu. Sessions changed this way are marked with the decision, so `/plan` and the season publisher don't undo them. A rejected suggestion is answered with the reasons and no buttons; there is no rules-engine fallback in chat.
+- **Medical boundary.** The system prompt (`prompts/chat-system-v1.md`) makes the coach say "I'm not a doctor" for pain, injury, illness or medication questions, keep to general guidance and recommend a professional.
+- **Limit.** `COACH_CHAT_DAILY_LIMIT` messages (default 30) per athlete per local day, counted in Redis. Over it, the athlete gets a polite notice and no LLM call is made.
+
 ## intervals.icu Integration
 
 `packages/integrations-icu` (`@triathlon/integrations-icu`) is a typed REST client for [intervals.icu](https://intervals.icu). The worker uses it to validate credentials in `/connect icu` and to sync activities and wellness.

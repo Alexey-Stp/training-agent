@@ -28,6 +28,8 @@ const envSchema = z.object({
   // Season rolling publisher: keeps the next N local days of the active season pushed to ICU
   SEASON_PUBLISH_EVERY_MIN: z.coerce.number().int().positive().default(360),
   SEASON_PUBLISH_WINDOW_DAYS: z.coerce.number().int().min(1).max(28).default(14),
+  // Free-form coach chat: messages per athlete per local day before the limit notice
+  COACH_CHAT_DAILY_LIMIT: z.coerce.number().int().positive().default(30),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

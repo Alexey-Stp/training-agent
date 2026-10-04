@@ -21,6 +21,7 @@ model User {
   seasonPlans       SeasonPlan[]
   llmCallLogs       LlmCallLog[]
   coachDecisions    CoachDecision[]
+  coachChatMessages CoachChatMessage[]
 
   @@index([telegramId])
 }
@@ -173,6 +174,8 @@ model PlannedSession {
   pushedAt       DateTime?
   externalChange String?              // why reconcile flagged it, e.g. "moved to 2026-10-02"
   deletedAt      DateTime?            // local tombstone: push deletes the ICU event, then the row
+  coachDecisionId String?             // applied coach decision that changed the row: /plan and the season
+                                      // publisher leave the row alone, and push keeps its tombstone
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
 
@@ -314,7 +317,13 @@ enum CoachAction {
   rest
 }
 
-// One row per daily coaching run, whatever its outcome (packages/ai suggestion/run.ts)
+enum CoachDecisionOrigin {
+  daily
+  chat
+}
+
+// One row per daily coaching run, whatever its outcome (packages/ai suggestion/run.ts), and one
+// per coach-chat suggestion (packages/ai chat/run.ts)
 model CoachDecision {
   id                      String              @id @default(cuid())
   userId                  String
@@ -335,7 +344,29 @@ model CoachDecision {
   summary                 String
   athleteMessage          String
   accepted                Boolean? // the athlete's answer; NULL until answered
+  answeredAt              DateTime?
+  origin                  CoachDecisionOrigin @default(daily)
   createdAt               DateTime            @default(now())
 
   @@index([userId, date])
+}
+
+enum CoachChatRole {
+  user
+  coach
+}
+
+// Free-form coach chat, both directions; the latest rows are the history sent to the LLM
+model CoachChatMessage {
+  id                String        @id @default(cuid())
+  userId            String
+  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role              CoachChatRole
+  text              String
+  telegramMessageId Int? // the athlete's message the row answers or is; a retried job upserts
+  coachDecisionId   String? // the suggestion offered with a coach reply
+  createdAt         DateTime      @default(now())
+
+  @@unique([userId, telegramMessageId, role])
+  @@index([userId, createdAt])
 }

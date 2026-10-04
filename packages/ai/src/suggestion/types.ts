@@ -19,12 +19,16 @@ export type GuardrailVerdict = 'accept' | 'clamp' | 'reject';
 
 export type CoachDecisionSource = 'llm' | 'repaired' | 'fallback';
 
+/** `daily`: the daily coaching run; `chat`: a suggestion from free-form coach chat */
+export type CoachDecisionOrigin = 'daily' | 'chat';
+
 export type FallbackReason =
   'llm_unavailable' | 'invalid_output' | 'guardrail_reject' | 'internal_error';
 
-/** Everything one daily coaching run decided, stored as a `CoachDecision` row. */
+/** Everything one daily coaching run or chat suggestion decided, stored as a `CoachDecision` row. */
 export interface CoachDecisionRecord {
   userId: string;
+  origin: CoachDecisionOrigin;
   date: string;
   promptVersion: string;
   suggestionPromptVersion: string;
@@ -48,5 +52,6 @@ export interface CoachDecisionRecord {
 }
 
 export interface CoachDecisionSink {
-  write(record: CoachDecisionRecord): Promise<void>;
+  /** Stores the decision and returns its id */
+  write(record: CoachDecisionRecord): Promise<string>;
 }

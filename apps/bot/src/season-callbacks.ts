@@ -4,9 +4,9 @@ import {
   SEASON_CONFIRM_COMMAND,
 } from '@triathlon/core';
 
-/** The job a season preview button enqueues, plus the toast shown on the tap. */
+/** The job a decision button (season preview, coach Apply/Keep) enqueues, plus the toast shown on the tap. */
 export interface DecisionJob {
-  commandName: typeof SEASON_CONFIRM_COMMAND | typeof SEASON_CANCEL_COMMAND;
+  commandName: string;
   args: string[];
   toast: string;
 }

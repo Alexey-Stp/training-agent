@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { Bot, InlineKeyboard, type Context } from 'grammy';
 import Redis from 'ioredis';
-import { getConfig, getEncKeys, SEASON_PREVIEW_COMMAND } from '@triathlon/core';
+import { COACH_CHAT_COMMAND, getConfig, getEncKeys, SEASON_PREVIEW_COMMAND } from '@triathlon/core';
 import type { CommandJob } from '@triathlon/core';
 import { commandQueue, enqueueCommand } from './queue';
 import { logger } from './logger';
@@ -15,6 +15,7 @@ import {
   type SeasonDialogOutcome,
 } from './season-dialog';
 import { routeSeasonDecision, type DecisionJob } from './season-callbacks';
+import { routeCoachDecision } from './coach-callbacks';
 
 const config = getConfig();
 const [encKey] = getEncKeys(config);
@@ -147,8 +148,10 @@ bot.on('message:text', async (ctx) => {
       'Job enqueued'
     );
 
-    // Send quick acknowledgment for non-start commands
-    if (parsed.commandName !== 'start') {
+    // Quick acknowledgment: the coach is "typing" an answer, commands get 👀
+    if (parsed.commandName === COACH_CHAT_COMMAND) {
+      await ctx.replyWithChatAction('typing');
+    } else if (parsed.commandName !== 'start') {
       await ctx.react('👀');
     }
   } catch (error) {
@@ -191,7 +194,7 @@ async function applyWizardTap(ctx: Context, outcome: SeasonDialogOutcome, messag
   await ctx.answerCallbackQuery();
 }
 
-/** Preview button: drop the buttons so they can't be tapped again, then enqueue the decision. */
+/** Decision button: drop the buttons so they can't be tapped again, then enqueue the decision. */
 async function applyDecisionTap(ctx: Context, job: DecisionJob, messageId: number) {
   const userId = ctx.from?.id;
   const chatId = ctx.chat?.id;
@@ -212,7 +215,7 @@ async function applyDecisionTap(ctx: Context, job: DecisionJob, messageId: numbe
   await ctx.answerCallbackQuery({ text: job.toast });
 }
 
-// Inline buttons: the season wizard steps and the season preview's confirm/cancel
+// Inline buttons: coach Apply/Keep, the season wizard steps and the season preview's confirm/cancel
 bot.on('callback_query:data', async (ctx) => {
   try {
     const { data, message } = ctx.callbackQuery;
@@ -220,7 +223,7 @@ bot.on('callback_query:data', async (ctx) => {
       await ctx.answerCallbackQuery({ text: WIZARD_EXPIRED });
       return;
     }
-    const decision = routeSeasonDecision(data);
+    const decision = routeCoachDecision(data) ?? routeSeasonDecision(data);
     if (decision) {
       await applyDecisionTap(ctx, decision, message.message_id);
       return;
