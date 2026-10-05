@@ -38,12 +38,14 @@ import {
   dailyContextDeps,
   briefProfileRepo,
   dailyBriefRunRepo,
+  closeoutRepo,
+  eveningCloseoutRunRepo,
   checkInRepo,
 } from './db';
 import {
   handleStart,
   handleProfile,
-  handleSetFtp,
+  handleSet,
   handlePlan,
   handlePlanPushCommand,
   handleLog,
@@ -90,14 +92,19 @@ import {
 } from './sync-scheduler';
 import {
   DAILY_BRIEF_QUEUE,
+  EVENING_CLOSEOUT_QUEUE,
   combineSchedulers,
   createCheckInContinuation,
   createDailyBriefScheduler,
+  createEveningCloseoutScheduler,
   reconcileDailyBriefSchedulers,
+  reconcileEveningCloseoutSchedulers,
   type DailyBriefJob,
   type DailyBriefSchedulerDeps,
+  type EveningCloseoutJob,
 } from './daily-loop/scheduler';
 import { runDailyBrief, type DailyBriefDeps } from './daily-loop/pipeline';
+import { runEveningCloseout, type EveningCloseoutDeps } from './daily-loop/closeout';
 import { handleCheckInAnswer, type CheckInAnswerDeps } from './daily-loop/checkin-answer';
 
 const config = getConfig();
@@ -135,6 +142,15 @@ const checkInContinuation = createCheckInContinuation(
   briefQueue,
   config.DAILY_CHECKIN_TIMEOUT_MINUTES * 60_000
 );
+// Evening close-out: per linked athlete, one cron scheduler at the local Profile.closeoutTime
+const closeoutSchedulerDeps: DailyBriefSchedulerDeps = {
+  profiles: briefProfileRepo,
+  defaultTime: config.EVENING_CLOSEOUT_DEFAULT_TIME,
+};
+const closeoutQueue = new Queue<EveningCloseoutJob>(EVENING_CLOSEOUT_QUEUE, {
+  connection: redisConnection,
+});
+const closeoutScheduler = createEveningCloseoutScheduler(closeoutQueue, closeoutSchedulerDeps);
 const checkInAnswerDeps: CheckInAnswerDeps = {
   runs: dailyBriefRunRepo,
   wellness: checkInRepo,
@@ -255,9 +271,11 @@ const icuConnectDeps: IcuConnectDeps = {
   repo: icuConnectionRepo,
   keys: encKeys,
   createClient: (athleteId, apiKey) => new IcuClient({ athleteId, apiKey }),
-  scheduler: config.DAILY_BRIEF_ENABLED
-    ? combineSchedulers(icuSyncScheduler, dailyBriefScheduler)
-    : icuSyncScheduler,
+  scheduler: combineSchedulers(
+    icuSyncScheduler,
+    ...(config.DAILY_BRIEF_ENABLED ? [dailyBriefScheduler] : []),
+    ...(config.EVENING_CLOSEOUT_ENABLED ? [closeoutScheduler] : [])
+  ),
   onSchedulerError: (error, userId) => {
     logger.error({ error, userId }, 'Failed to update intervals.icu sync schedule');
   },
@@ -349,16 +367,7 @@ const worker = new Worker<CommandJob>(
           break;
 
         case 'set':
-          if (args.length >= 2 && args[0].toLowerCase() === 'ftp') {
-            const ftp = parseInt(args[1], 10);
-            if (isNaN(ftp) || ftp < 50 || ftp > 600) {
-              response = '❌ Invalid FTP value. Must be between 50 and 600.';
-            } else {
-              response = await handleSetFtp(user, ftp);
-            }
-          } else {
-            response = '❌ Usage: /set ftp <number>';
-          }
+          response = await handleSet(user, args);
           break;
 
         case 'plan':
@@ -615,6 +624,36 @@ briefWorker?.on('error', (err) => {
   logger.error({ error: err }, 'Daily brief worker error');
 });
 
+const closeoutDeps: EveningCloseoutDeps = {
+  runs: eveningCloseoutRunRepo,
+  profiles: briefProfileRepo,
+  closeout: closeoutRepo,
+  syncActivities: (userId) => syncActivities(userId, activitySyncDeps),
+  sendMessage: (chatId, text, options) => api.sendMessage(chatId, text, options),
+  deviationThresholdPct: config.CLOSEOUT_DEVIATION_THRESHOLD_PCT,
+  logger,
+  now: () => new Date(),
+};
+
+const closeoutWorker = config.EVENING_CLOSEOUT_ENABLED
+  ? new Worker<EveningCloseoutJob>(
+      EVENING_CLOSEOUT_QUEUE,
+      (job: Job<EveningCloseoutJob>) => runEveningCloseout(job.data.userId, closeoutDeps),
+      { connection: redisConnection, concurrency: 2 }
+    )
+  : null;
+
+closeoutWorker?.on('failed', (job, err) => {
+  logger.error(
+    { jobId: job?.id, userId: job?.data.userId, attempt: job?.attemptsMade, error: err },
+    'Evening close-out failed'
+  );
+});
+
+closeoutWorker?.on('error', (err) => {
+  logger.error({ error: err }, 'Evening close-out worker error');
+});
+
 async function startIcuSync() {
   const userIds = await activityRepo.listConnectedUserIds();
   const result = await reconcileSchedulers(syncQueue, icuSyncScheduler, userIds, syncJobs);
@@ -628,6 +667,13 @@ async function startIcuSync() {
     briefSchedulerDeps
   );
   logger.info(brief, 'Daily brief schedules reconciled');
+  const closeout = await reconcileEveningCloseoutSchedulers(
+    closeoutQueue,
+    closeoutScheduler,
+    config.EVENING_CLOSEOUT_ENABLED ? userIds : [],
+    closeoutSchedulerDeps
+  );
+  logger.info(closeout, 'Evening close-out schedules reconciled');
 }
 
 startIcuSync().catch((error: unknown) => {
@@ -639,8 +685,13 @@ logger.info('Worker started and listening for jobs...');
 // Graceful shutdown
 async function shutdown() {
   logger.info('Shutting down worker...');
-  await Promise.all([worker.close(), syncWorker.close(), briefWorker?.close()]);
-  await Promise.all([syncQueue.close(), briefQueue.close()]);
+  await Promise.all([
+    worker.close(),
+    syncWorker.close(),
+    briefWorker?.close(),
+    closeoutWorker?.close(),
+  ]);
+  await Promise.all([syncQueue.close(), briefQueue.close(), closeoutQueue.close()]);
   redis.disconnect();
   await prisma.$disconnect();
   process.exit(0);

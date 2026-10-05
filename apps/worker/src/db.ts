@@ -1,6 +1,7 @@
 import {
   PrismaClient,
   type DailyBriefRun as DailyBriefRunRow,
+  type EveningCloseoutRun as EveningCloseoutRunRow,
   type PlannedSession,
   type Prisma,
 } from '@prisma/client';
@@ -44,6 +45,11 @@ import type {
   StageTimings,
 } from './daily-loop/run-store';
 import type { BriefProfileRepo } from './daily-loop/scheduler';
+import type {
+  CloseoutRepo,
+  EveningCloseoutRun,
+  EveningCloseoutRunRepo,
+} from './daily-loop/closeout-store';
 import type { CheckInRepo } from './daily-loop/checkin';
 import {
   WELLNESS_DEVICE_FIELDS,
@@ -826,13 +832,17 @@ export const briefProfileRepo: BriefProfileRepo = {
   async findBriefProfile(userId) {
     const row = await prisma.user.findUnique({
       where: { id: userId },
-      select: { telegramId: true, profile: { select: { timezone: true, briefTime: true } } },
+      select: {
+        telegramId: true,
+        profile: { select: { timezone: true, briefTime: true, closeoutTime: true } },
+      },
     });
     if (!row?.profile) return null;
     return {
       telegramChatId: Number(row.telegramId),
       timezone: row.profile.timezone,
       briefTime: row.profile.briefTime,
+      closeoutTime: row.profile.closeoutTime,
     };
   },
 };
@@ -929,5 +939,147 @@ export const dailyBriefRunRepo: DailyBriefRunRepo = {
       where: { id },
       data: { status: 'failed', error, stageTimings: toJson(stageTimings) },
     });
+  },
+};
+
+function toEveningCloseoutRun(row: EveningCloseoutRunRow): EveningCloseoutRun {
+  return {
+    id: row.id,
+    status: row.status,
+    messageText: row.messageText,
+    stageTimings: row.stageTimings as StageTimings,
+  };
+}
+
+export const eveningCloseoutRunRepo: EveningCloseoutRunRepo = {
+  async claim(userId, date, now, leaseMs) {
+    // skipDuplicates: the (userId, date) row may exist from an earlier trigger or attempt
+    await prisma.eveningCloseoutRun.createMany({ data: [{ userId, date }], skipDuplicates: true });
+    // One conditional update takes the run over, so two concurrent triggers can't both win
+    const { count } = await prisma.eveningCloseoutRun.updateMany({
+      where: {
+        userId,
+        date,
+        OR: [
+          { status: { in: ['pending', 'failed'] } },
+          { status: 'running', startedAt: { lt: new Date(now.getTime() - leaseMs) } },
+        ],
+      },
+      data: { status: 'running', startedAt: now, error: null },
+    });
+    const row = await prisma.eveningCloseoutRun.findUniqueOrThrow({
+      where: { userId_date: { userId, date } },
+    });
+    if (count > 0) return { status: 'claimed', run: toEveningCloseoutRun(row) };
+    return { status: row.status === 'running' ? 'in_progress' : 'already_done' };
+  },
+
+  async saveMessage(id, messageText, stageTimings) {
+    await prisma.eveningCloseoutRun.update({
+      where: { id },
+      data: { messageText, stageTimings: toJson(stageTimings) },
+    });
+  },
+
+  async markQuiet(id, stageTimings) {
+    await prisma.eveningCloseoutRun.update({
+      where: { id },
+      data: { status: 'quiet', error: null, stageTimings: toJson(stageTimings) },
+    });
+  },
+
+  async markSent(id, sentAt, stageTimings) {
+    await prisma.eveningCloseoutRun.update({
+      where: { id },
+      data: { status: 'sent', sentAt, error: null, stageTimings: toJson(stageTimings) },
+    });
+  },
+
+  async markFailed(id, error, stageTimings) {
+    await prisma.eveningCloseoutRun.update({
+      where: { id },
+      data: { status: 'failed', error, stageTimings: toJson(stageTimings) },
+    });
+  },
+};
+
+export const closeoutRepo: CloseoutRepo = {
+  async listDay(userId, date) {
+    const [sessions, activities, profile] = await Promise.all([
+      prisma.plannedSession.findMany({
+        where: { userId, date },
+        select: {
+          id: true,
+          slot: true,
+          sport: true,
+          title: true,
+          durationMin: true,
+          intensity: true,
+          status: true,
+          deletedAt: true,
+        },
+        orderBy: { slot: 'asc' },
+      }),
+      prisma.activity.findMany({
+        where: { userId, startDateLocal: date },
+        select: {
+          id: true,
+          icuId: true,
+          sport: true,
+          name: true,
+          startTime: true,
+          durationSec: true,
+          avgHr: true,
+          avgPower: true,
+        },
+        orderBy: { startTime: 'asc' },
+      }),
+      prisma.profile.findUnique({ where: { userId }, select: { ftp: true, lthr: true } }),
+    ]);
+    return {
+      sessions: sessions.map(({ deletedAt, ...row }) => ({
+        ...row,
+        sport: row.sport as Sport,
+        intensity: row.intensity as Intensity,
+        deleted: deletedAt !== null,
+      })),
+      activities: activities.map((row) => ({ ...row, sport: row.sport as Sport })),
+      thresholds: { ftp: profile?.ftp ?? null, lthr: profile?.lthr ?? null },
+    };
+  },
+
+  async apply(userId, date, write) {
+    const sessionIds = write.sessions.map((s) => s.sessionId);
+    const activityIds = write.links.map((l) => l.activityId);
+    // Array form: one transaction. Links are cleared before they are set, so a session that
+    // moves to another activity doesn't trip the unique plannedSessionId
+    await prisma.$transaction([
+      prisma.activity.updateMany({
+        where: { userId, plannedSessionId: { in: sessionIds }, id: { notIn: activityIds } },
+        data: { plannedSessionId: null },
+      }),
+      prisma.activity.updateMany({
+        where: { userId, startDateLocal: date, id: { in: activityIds } },
+        data: { plannedSessionId: null, closedOutAt: write.closedOutAt },
+      }),
+      ...write.sessions.map((s) =>
+        prisma.plannedSession.updateMany({
+          where: { id: s.sessionId, userId, date, deletedAt: null },
+          data: {
+            status: s.status,
+            deviationPct: s.deviationPct,
+            actualIntensity: s.actualIntensity,
+          },
+        })
+      ),
+      ...write.links
+        .filter((l) => l.sessionId !== null)
+        .map((l) =>
+          prisma.activity.updateMany({
+            where: { id: l.activityId, userId, startDateLocal: date },
+            data: { plannedSessionId: l.sessionId },
+          })
+        ),
+    ]);
   },
 };

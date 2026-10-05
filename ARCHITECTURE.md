@@ -110,7 +110,8 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 - `plan-push.ts` - `pushPlannedSessions`: creates/updates/deletes ICU `WORKOUT` events for pending sessions, `external_id` orphan adoption, `hashIcuEvent` (injected deps)
 - `plan-reconcile.ts` - `icu-plan-reconcile` job processor: flags sessions whose ICU event was moved/edited/deleted as `modified_externally` (injected deps)
 - `plan-command.ts` - `/plan push` handler (store, push, reply)
-- `db.ts` - Database utilities (user creation, deduplication, `icuConnectionRepo`, `activityRepo`, `wellnessRepo`, `plannedSessionRepo`, `raceRepo`, `seasonRepo` (active season, drafts, transactional activation), `profileRepo`, `loadTrainingHours`)
+- `daily-loop/` - Morning brief (`pipeline.ts`, `render.ts`, `checkin*.ts`), evening close-out (`closeout.ts`, `closeout-render.ts`, `closeout-store.ts`), shared per-athlete cron schedulers (`scheduler.ts`) and run helpers (`run-helpers.ts`)
+- `db.ts` - Database utilities (user creation, deduplication, `icuConnectionRepo`, `activityRepo`, `wellnessRepo`, `plannedSessionRepo`, `raceRepo`, `seasonRepo` (active season, drafts, transactional activation), `profileRepo`, `loadTrainingHours`, `dailyBriefRunRepo`, `eveningCloseoutRunRepo`, `closeoutRepo`)
 
 **Design Principles**:
 
@@ -631,6 +632,30 @@ runDailyBrief (apps/worker/src/daily-loop/pipeline.ts)
 - **Brief message** (`daily-loop/render.ts`, snapshot-tested). The readiness line (`daily-loop/readiness.ts`) is deterministic: worst of check-in readiness (≤ 2/5 red, like `ReadinessDownshift`), HRV vs the 30-day baseline and TSB (below −20), ⚪ without data. Proposed changes are one line per session (ai `describeSessionChanges`, e.g. `Bike VO2 5x4 70′→50′, Z5→Z3`). Apply / Keep plan only when there are changes; Discuss always.
 - **Check-in** (`daily-loop/checkin.ts`, `checkin-answer.ts`, migration `9b_daily_checkin`). `checkInReason` is pure: no row or no device data → `no_data`, HRV more than 1 SD off the 30-day mean in either direction → `hrv_deviation` (too few readings for a baseline never triggers), a day with both answers → none. The buttons carry `ci:r:<1-5>` / `ci:s:<0-2>` (core `checkin.ts`; soreness none=0, mild=1, severe=2, rendered as the label in the prompt). The bot enqueues `checkin_answer` with a per-button job id and leaves the buttons; the worker finds the run by `DailyBriefRun.checkInMessageId`, writes only the subjective column (`checkInRepo.recordCheckIn`: first answer wins) and edits the message to the remaining question. These taps skip the `ProcessedMessage` check, because both answers share one message id. With both answers in while the run is `awaiting_checkin`, it promotes the delayed continuation job; otherwise that job fires at the timeout. Late answers are still stored. Wellness sync never touches these columns (`WELLNESS_DEVICE_FIELDS`).
 - **Answering a brief.** The buttons use the coach-chat answer flow above. For a daily decision the result replaces the tapped brief: the worker edits the message (`RichReply.editTapped`, `CommandJob.messageId` is the tapped message) to the stored `DailyBriefRun.briefText` plus the result, without buttons. Discuss sends a new message instead.
+
+### Evening close-out (implemented)
+
+```
+evening-closeout queue: one cron scheduler per linked athlete
+  key evening-closeout:<userId>, pattern from Profile.closeoutTime (?? EVENING_CLOSEOUT_DEFAULT_TIME), tz Profile.timezone
+        │
+        ▼
+runEveningCloseout (apps/worker/src/daily-loop/closeout.ts)
+  date = localToday(now, timezone)
+  claim EveningCloseoutRun (userId, date) ─ quiet/sent ─► skip ─ running within lease ─► CloseoutInProgressError (retry)
+  message already stored (retry after a failed send)? ─ yes ─► send it
+  activity sync ─ throws ─► run failed, rethrow (nothing written)
+  match: closeoutRepo.listDay ─► core matchActivities ─► closeDay ─► closeoutRepo.apply (one transaction)
+  notices: missed key session ‖ |deviation| > CLOSEOUT_DEVIATION_THRESHOLD_PCT ‖ unplanned activity
+     ─ none ─► run quiet (no message)
+     ─ some ─► render, save message on the run, send ─ fails ─► run failed, rethrow (3 attempts)
+  run sent
+```
+
+- **Matching** (core `closeout.ts`, pure). `matchActivities` drops tombstoned and rest sessions, builds every same-sport (session, activity) pair, sorts by `|actual min − planned min|` (ties: slot, start time, ICU id) and takes pairs greedily while both are free. The result is one-to-one and independent of input order. Leftover sessions are skipped and leftover activities unmatched. `deviationPct` is `(actual − planned) / planned × 100` with one decimal. `guessIntensity` uses bike power vs FTP (`powerZones`, moved here from ai), otherwise average HR vs `Profile.lthr` (Friel bands: < 85% z1, < 90% z2, < 95% z3, < 100% z4, else z5). `isKeySession` (Z4/Z5 or ≥ 90 min) also moved to core, and ai's `missedKeySessions` uses it.
+- **Writes** (`closeoutRepo.apply`, one array transaction). Matched sessions are set `completed` with `deviationPct`/`actualIntensity`, and unmatched ones `skipped`. Each of the day's activities gets `closedOutAt` and its `plannedSessionId` (unique, `ON DELETE SET NULL`), cleared first so a link can move between activities. Only rows of that date are touched: sessions without `deletedAt` and activities by `startDateLocal`. `modified_externally` sessions that nothing matched keep their status. Activity sync updates only the ICU fields, so it never resets the link. `completed`/`skipped` rows are already protected from `/plan`, the season publisher and the coach (`PROTECTED_STATUSES`, guardrail `lockedStatuses`).
+- **Weekly review data.** `PlannedSession.status`/`deviationPct`/`actualIntensity` per session, plus unplanned activities (`closedOutAt IS NOT NULL AND plannedSessionId IS NULL`). Migration `9c_evening_closeout` also adds `Profile.lthr`/`closeoutTime` and `@@index([userId, startDateLocal])` on `Activity`.
+- **Scheduling.** The brief and close-out schedulers come from one cron-scheduler factory and reconcile in `scheduler.ts`, parametrized by job name and `repeat(profile)`. Both are combined into the connect/disconnect scheduler and reconciled at startup. A disabled feature reconciles against no athletes, so its schedulers are removed.
 
 ## Security Considerations
 

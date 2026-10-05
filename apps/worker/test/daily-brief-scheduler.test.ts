@@ -5,8 +5,11 @@ import {
   combineSchedulers,
   createCheckInContinuation,
   createDailyBriefScheduler,
+  createEveningCloseoutScheduler,
   dailyBriefSchedulerId,
+  eveningCloseoutSchedulerId,
   reconcileDailyBriefSchedulers,
+  reconcileEveningCloseoutSchedulers,
   type BriefProfile,
   type DailyBriefSchedulerDeps,
 } from '../src/daily-loop/scheduler';
@@ -30,12 +33,20 @@ function fakeQueue(existing: ExistingScheduler[] = []) {
 
 type SchedulerQueue = Parameters<typeof createDailyBriefScheduler>[0];
 
-const PRAGUE: BriefProfile = { telegramChatId: 1001, timezone: 'Europe/Prague', briefTime: null };
+const PRAGUE: BriefProfile = {
+  telegramChatId: 1001,
+  timezone: 'Europe/Prague',
+  briefTime: null,
+  closeoutTime: null,
+};
 
-function schedulerDeps(profiles: Record<string, BriefProfile>): DailyBriefSchedulerDeps {
+function schedulerDeps(
+  profiles: Record<string, BriefProfile>,
+  defaultTime = '06:30'
+): DailyBriefSchedulerDeps {
   return {
     profiles: { findBriefProfile: (userId) => Promise.resolve(profiles[userId] ?? null) },
-    defaultTime: '06:30',
+    defaultTime,
   };
 }
 
@@ -87,6 +98,7 @@ describe('createDailyBriefScheduler', () => {
       telegramChatId: 1,
       timezone: 'America/New_York',
       briefTime: '05:45',
+      closeoutTime: null,
     };
     const scheduler = createDailyBriefScheduler(
       queue as unknown as SchedulerQueue,
@@ -276,5 +288,75 @@ describe('createCheckInContinuation', () => {
     );
 
     expect(promote).not.toHaveBeenCalled();
+  });
+});
+
+describe('createEveningCloseoutScheduler', () => {
+  it('upserts a daily cron in the athlete timezone, defaulting to 20:30', async () => {
+    const queue = fakeQueue();
+    const scheduler = createEveningCloseoutScheduler(
+      queue as unknown as SchedulerQueue,
+      schedulerDeps({ u1: PRAGUE }, '20:30')
+    );
+
+    await scheduler.schedule('u1');
+
+    expect(queue.upsertJobScheduler).toHaveBeenCalledWith(
+      'evening-closeout:u1',
+      { pattern: '30 20 * * *', tz: 'Europe/Prague' },
+      expect.objectContaining({ name: 'evening-closeout', data: { userId: 'u1' } })
+    );
+  });
+
+  it("uses the athlete's closeoutTime, not the briefTime", async () => {
+    const queue = fakeQueue();
+    const profile: BriefProfile = { ...PRAGUE, briefTime: '05:45', closeoutTime: '21:15' };
+    const scheduler = createEveningCloseoutScheduler(
+      queue as unknown as SchedulerQueue,
+      schedulerDeps({ u1: profile }, '20:30')
+    );
+
+    await scheduler.schedule('u1');
+
+    expect(queue.upsertJobScheduler).toHaveBeenCalledWith(
+      'evening-closeout:u1',
+      { pattern: '15 21 * * *', tz: 'Europe/Prague' },
+      expect.anything()
+    );
+  });
+
+  it('removes the scheduler on unschedule', async () => {
+    const queue = fakeQueue();
+    const scheduler = createEveningCloseoutScheduler(
+      queue as unknown as SchedulerQueue,
+      schedulerDeps({}, '20:30')
+    );
+
+    await scheduler.unschedule('u1');
+
+    expect(queue.removeJobScheduler).toHaveBeenCalledWith(eveningCloseoutSchedulerId('u1'));
+  });
+});
+
+describe('reconcileEveningCloseoutSchedulers', () => {
+  it('schedules stale athletes and removes only close-out orphans', async () => {
+    const queue = fakeQueue([
+      { key: 'evening-closeout:ok', pattern: '30 20 * * *', tz: 'Europe/Prague' },
+      { key: 'evening-closeout:gone', pattern: '30 20 * * *', tz: 'Europe/Prague' },
+      { key: 'daily-brief:gone', pattern: '30 6 * * *', tz: 'Europe/Prague' },
+    ]);
+    const scheduler = fakeScheduler();
+
+    const result = await reconcileEveningCloseoutSchedulers(
+      queue as unknown as SchedulerQueue,
+      scheduler,
+      ['ok', 'new'],
+      schedulerDeps({ ok: PRAGUE, new: PRAGUE }, '20:30')
+    );
+
+    expect(result).toEqual({ scheduled: 1, removed: 1 });
+    expect(scheduler.schedule).toHaveBeenCalledWith('new');
+    expect(scheduler.unschedule).toHaveBeenCalledTimes(1);
+    expect(scheduler.unschedule).toHaveBeenCalledWith('gone');
   });
 });

@@ -1,11 +1,10 @@
-import { addDaysIso, HARD_INTENSITIES, Intensity, Sport } from '@triathlon/core';
+import { addDaysIso, isKeySession, Sport } from '@triathlon/core';
 import type {
   ActivitySummary,
   Compliance,
   HistoryDay,
   HrvBaseline,
   PlannedSessionSummary,
-  PowerZone,
   SportCompliance,
   TrainingLoad,
   WellnessDay,
@@ -24,8 +23,8 @@ export const COMPLIANCE_DAYS = 7;
 export const HISTORY_DAYS = 14;
 /** Days after `date` shown as upcoming, so today plus this many */
 export const UPCOMING_DAYS = 3;
-/** A session at least this long counts as key even when it is easy (long ride/run) */
-export const KEY_SESSION_MIN_MINUTES = 90;
+// Shared with the evening close-out, which lives in the worker
+export { isKeySession, KEY_SESSION_MIN_MINUTES, powerZones } from '@triathlon/core';
 
 const DAY_MS = 86_400_000;
 
@@ -190,11 +189,6 @@ export function compliance(
   };
 }
 
-/** Hard (Z4/Z5) or long sessions: the ones a missed day should be judged by. */
-export function isKeySession(session: Pick<PlannedSessionSummary, 'intensity' | 'durationMin'>) {
-  return HARD_INTENSITIES.has(session.intensity) || session.durationMin >= KEY_SESSION_MIN_MINUTES;
-}
-
 /**
  * Key sessions of the `HISTORY_DAYS` days before `date` that were skipped, or had no
  * activity of the same sport on their day.
@@ -226,23 +220,5 @@ export function trainingHistory(
     date: d,
     planned: planned.filter((s) => s.date === d),
     actual: activities.filter((a) => a.startDateLocal === d),
-  }));
-}
-
-const ZONE_BANDS: readonly [Intensity, string, number, number | null][] = [
-  [Intensity.z1, 'Recovery', 0, 0.55],
-  [Intensity.z2, 'Endurance', 0.56, 0.75],
-  [Intensity.z3, 'Tempo', 0.76, 0.9],
-  [Intensity.z4, 'Threshold', 0.91, 1.05],
-  [Intensity.z5, 'VO2max+', 1.06, null],
-];
-
-/** Coggan-style power zones from FTP, one per `Intensity`. */
-export function powerZones(ftp: number): PowerZone[] {
-  return ZONE_BANDS.map(([zone, label, lo, hi]) => ({
-    zone,
-    label,
-    minWatts: Math.round(ftp * lo),
-    maxWatts: hi === null ? null : Math.round(ftp * hi),
   }));
 }

@@ -23,6 +23,7 @@ model User {
   coachDecisions    CoachDecision[]
   coachChatMessages CoachChatMessage[]
   dailyBriefRuns    DailyBriefRun[]
+  eveningCloseoutRuns EveningCloseoutRun[]
 
   @@index([telegramId])
 }
@@ -38,6 +39,8 @@ model Profile {
   longBikeDay   String   @default("Sun")
   noLongRunDay  String   @default("Sun")
   briefTime     String? // HH:mm local time of the morning brief; NULL uses DAILY_BRIEF_DEFAULT_TIME
+  closeoutTime  String? // HH:mm local time of the evening close-out; NULL uses EVENING_CLOSEOUT_DEFAULT_TIME
+  lthr          Int?    // lactate threshold heart rate (bpm): the close-out's HR intensity guess
   updatedAt     DateTime @updatedAt
 
   @@index([userId])
@@ -142,11 +145,17 @@ model Activity {
   avgHr          Int?
   avgPower       Int?
   source         String?  // GARMIN_CONNECT, STRAVA, UPLOAD, ...
+  // Evening close-out (daily-loop/closeout.ts): the planned session this activity fulfilled.
+  // closedOutAt set with no plannedSessionId = unplanned workout, flagged for the weekly review
+  plannedSessionId String?         @unique
+  plannedSession   PlannedSession? @relation(fields: [plannedSessionId], references: [id], onDelete: SetNull)
+  closedOutAt      DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   @@unique([userId, icuId])
   @@index([userId, startTime])
+  @@index([userId, startDateLocal])
 }
 
 enum PlannedSessionStatus {
@@ -178,6 +187,9 @@ model PlannedSession {
   deletedAt      DateTime?            // local tombstone: push deletes the ICU event, then the row
   coachDecisionId String?             // applied coach decision that changed the row: /plan and the season
                                       // publisher leave the row alone, and push keeps its tombstone
+  deviationPct    Float?              // close-out: actual vs planned duration in % (completed rows)
+  actualIntensity Intensity?          // close-out: zone guessed from the matched activity's power/HR
+  activity        Activity?           // close-out: the activity that fulfilled the session
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
 
@@ -411,4 +423,30 @@ model DailyBriefRun {
 
   @@unique([userId, date])
   @@index([userId, checkInMessageId])
+}
+
+enum EveningCloseoutStatus {
+  pending
+  running
+  quiet // nothing notable: no message
+  sent
+  failed
+}
+
+// One evening close-out per athlete and local day (apps/worker daily-loop/closeout.ts)
+model EveningCloseoutRun {
+  id           String                @id @default(cuid())
+  userId       String
+  user         User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date         String // YYYY-MM-DD in the athlete's local time
+  status       EveningCloseoutStatus @default(pending)
+  startedAt    DateTime? // lease of the run in progress
+  messageText  String? // rendered close-out (Telegram HTML); a retry resends it
+  stageTimings Json                  @default("{}") // stage → ms
+  error        String?
+  sentAt       DateTime?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  @@unique([userId, date])
 }
