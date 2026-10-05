@@ -1,5 +1,6 @@
 import type { Intensity, Sport } from '@triathlon/core';
 import type { PlannedSessionStatus } from '../context/types';
+import type { WeeklyReview } from '../weekly/schema';
 import type { CoachAction, CoachSuggestion, SessionDiff } from './schema';
 
 /** A planned session the coach may change. `id` is `sessionKey(session)`. */
@@ -19,13 +20,22 @@ export type GuardrailVerdict = 'accept' | 'clamp' | 'reject';
 
 export type CoachDecisionSource = 'llm' | 'repaired' | 'fallback';
 
-/** `daily`: the daily coaching run; `chat`: a suggestion from free-form coach chat */
-export type CoachDecisionOrigin = 'daily' | 'chat';
+/**
+ * `daily`: the daily coaching run; `chat`: a suggestion from free-form coach chat; `weekly`: the
+ * Sunday weekly review, whose changes target next week
+ */
+export type CoachDecisionOrigin = 'daily' | 'chat' | 'weekly';
+
+/** A stored decision's action: the LLM's actions plus `adjust`, a weekly change that adds minutes */
+export type CoachDecisionAction = CoachAction | 'adjust';
 
 export type FallbackReason =
   'llm_unavailable' | 'invalid_output' | 'guardrail_reject' | 'internal_error';
 
-/** Everything one daily coaching run or chat suggestion decided, stored as a `CoachDecision` row. */
+/**
+ * Everything one daily coaching run, chat suggestion or weekly review decided, stored as a
+ * `CoachDecision` row.
+ */
 export interface CoachDecisionRecord {
   userId: string;
   origin: CoachDecisionOrigin;
@@ -40,12 +50,12 @@ export interface CoachDecisionRecord {
   attempts: number;
   /** Raw LLM replies, one per call that returned */
   rawResponses: string[];
-  /** The parsed suggestion, before guardrails */
-  suggestion: CoachSuggestion | null;
+  /** The parsed suggestion (a weekly review for `weekly`), before guardrails */
+  suggestion: CoachSuggestion | WeeklyReview | null;
   /** null when no suggestion reached the guardrails */
   verdict: GuardrailVerdict | null;
   reasons: string[];
-  finalAction: CoachAction;
+  finalAction: CoachDecisionAction;
   finalChanges: SessionDiff[];
   summary: string;
   athleteMessage: string;

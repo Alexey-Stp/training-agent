@@ -91,6 +91,7 @@ class MemoryAnswers implements CoachAnswerRepo {
     this.decisions.set(DECISION_ID, {
       id: DECISION_ID,
       origin: 'chat',
+      date: TODAY,
       athleteMessage: 'Take it a little easier today.',
       accepted: null,
       createdAt: NOW,
@@ -151,8 +152,8 @@ class MemoryAnswers implements CoachAnswerRepo {
     return Promise.resolve();
   }
 
-  findBriefText(_userId: string, decisionId: string) {
-    return Promise.resolve(this.briefs.get(decisionId) ?? null);
+  findAnswerText(_userId: string, decision: Pick<AnswerableDecision, 'id' | 'origin'>) {
+    return Promise.resolve(this.briefs.get(decision.id) ?? null);
   }
 }
 
@@ -408,6 +409,80 @@ describe('handleCoachAnswer: morning brief', () => {
     answers.briefs.clear();
     answers.add({ origin: 'daily', finalAction: 'reduce', finalChanges: EASE_VO2 });
     expect(await tap('keep')).toBe(MSG_KEPT);
+  });
+});
+
+describe('handleCoachAnswer: weekly review', () => {
+  const REPORT_TEXT = '📊 <b>Week 40 review</b>';
+  const SUNDAY_EVENING = new Date('2026-10-04T17:30:00Z');
+  /** +15 min on next Sunday's ride: within the 8% ramp cap of the 395-min week (cap 426) */
+  const CATCH_UP: SessionDiff = {
+    sessionId: LONG_RIDE,
+    field: 'durationMin',
+    before: 180,
+    after: 195,
+  };
+
+  beforeEach(() => {
+    answers.briefs.set(DECISION_ID, REPORT_TEXT);
+  });
+
+  it('applies next week on Sunday evening, pushes it and edits the report', async () => {
+    deps.now = () => SUNDAY_EVENING;
+    const eventId = plan.get('2026-10-11', 'bike-0')!.icuEventId!;
+    answers.add({
+      origin: 'weekly',
+      date: '2026-10-04',
+      finalAction: 'adjust',
+      finalChanges: [CATCH_UP],
+      createdAt: SUNDAY_EVENING,
+    });
+
+    const reply = (await tap('apply')) as RichReply;
+
+    // Next Sunday is outside the daily today..+6 window, but inside the review's next week
+    expect(reply).toEqual({
+      text: REPORT_TEXT + '\n\n✅ Applied:\n• Bike Long ride 180′→195′',
+      html: true,
+      editTapped: true,
+    });
+    expect(plan.get('2026-10-11', 'bike-0')).toMatchObject({
+      durationMin: 195,
+      status: 'pushed',
+      coachDecisionId: DECISION_ID,
+    });
+    expect(icu.events.get(eventId)?.moving_time).toBe(195 * 60);
+  });
+
+  it('re-checks the ramp cap on the current plan', async () => {
+    const before = snapshotRows();
+    const tooMuch: SessionDiff = { ...CATCH_UP, after: 240 };
+    answers.add({
+      origin: 'weekly',
+      date: '2026-10-04',
+      finalAction: 'adjust',
+      finalChanges: [tooMuch],
+    });
+
+    const reply = (await tap('apply')) as RichReply;
+
+    expect(reply.text).toBe(REPORT_TEXT + '\n\n' + MSG_PLAN_CHANGED);
+    expect(snapshotRows()).toEqual(before);
+    expect(answers.decisions.get(DECISION_ID)?.accepted).toBe(false);
+  });
+
+  it('records Keep under the report', async () => {
+    answers.add({
+      origin: 'weekly',
+      date: '2026-10-04',
+      finalAction: 'adjust',
+      finalChanges: [CATCH_UP],
+    });
+
+    const reply = (await tap('keep')) as RichReply;
+
+    expect(reply.text).toBe(REPORT_TEXT + '\n\n' + MSG_KEPT);
+    expect(plan.get('2026-10-11', 'bike-0')?.durationMin).toBe(180);
   });
 });
 

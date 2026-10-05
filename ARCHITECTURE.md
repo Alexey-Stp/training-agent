@@ -676,6 +676,29 @@ runWeeklyStats (apps/worker/src/reviews/weekly-stats.ts)
 - **Computation** (core `reviews/weekly-stats.ts`, pure, deterministic: sorted lists, one decimal). Planned = live non-rest sessions of the week. Actual = all of the week's activities, unplanned included. Per sport: planned/actual minutes, `compliancePct` (null when nothing was planned, never 0), actual distance (km) and TSS (`Activity.load`); planned distance/TSS are null because `PlannedSession` has neither. `unplannedWeek` when no session was planned. Key sessions (`isKeySession`) split by status: `completed` → hit, `skipped` → missed, anything else → pending. Intensity: each activity's minutes go to Z1-2 or Z3+ by `hrIntensity(avgHr, lthr)`, or unknown. Load: the latest CTL row in the 7 days before the week → the latest in the week, with deltas. Wellness: week averages and HRV change vs the 7 days before.
 - **Storage.** `WeeklyStats` (migration `9d_weekly_stats`): unique `(userId, isoWeek)`, `weekStart`/`weekEnd`, `unplannedWeek`, and the full result as versioned JSON in `stats` (`WEEKLY_STATS_VERSION`). The upsert is idempotent, so the job needs no run row or lease; a retry recomputes the same week.
 
+### Weekly review (implemented)
+
+```
+weekly-review queue: one cron scheduler per linked athlete (same factory and reconcile as weekly stats)
+  key weekly-review:<userId>, pattern '<m> <h> * * 0' from WEEKLY_REVIEW_TIME, tz Profile.timezone
+        │
+        ▼
+runWeeklyReviewJob (apps/worker/src/reviews/weekly-review.ts)
+  claim WeeklyReviewRun (userId, isoWeek of local today)   ─ already sent → skip; lease held → retry later
+  stored reportText? ─► resend it (no LLM call, no second CoachDecision)
+  activity sync (failure → stale note) → runWeeklyStats(current week)
+  season position (this week, next week) + next week's PlannedSession rows + getRulesContext(next Monday)
+  ai runWeeklyReview: prompts/weekly-v1.md → requestStructured (one repair)
+        → runWeeklyGuardrails → CoachDecision (origin 'weekly')
+  renderWeeklyReport (≤ 15 lines) → saveReport → send → markSent
+```
+
+- **Output** (ai `weekly/schema.ts`). `{ summary, wins, concerns, nextWeekChanges: SessionDiff[], blockAdjustment: { kind: 'scale_volume', factor 0.6–1.08, reason } | null }`. Wins and concerns are cut to two each.
+- **Guardrails** (ai `weekly/guardrails.ts`, pure). Changes and a block adjustment together are rejected. A block adjustment expands into one `durationMin` change per active, unlocked session, rounded to 5 min towards the original so the week never moves further than the factor. Then `runGuardrails` runs unchanged (integrity, clamps with action `reduce` so nothing is cancelled, new `checkHardRules` violations), and finally the ramp cap: the patched week's minutes may exceed the original by at most `maxRamp` (`WEEKLY_REVIEW_MAX_RAMP_PCT`, default 8%, the block generator's `maxWeeklyRamp`). Any reject falls back to `deterministicRecommendation` on next week; the LLM's summary/wins/concerns are kept with a note. LLM down or invalid twice falls back to `fallbackReview(stats)`. Every run writes exactly one decision. Its `finalAction` is derived (`keep`/`reduce`/`move`/`swap`, or `adjust` when a change adds minutes or intensity; `adjust` exists only for stored decisions).
+- **Prompt** (`weekly-v1.md`, `renderWeeklySections`). Volume per sport with the gap in minutes and the actual km, key sessions, intensity, load, wellness, season block for this and next week, and next week's sessions with ids. Pure and byte-deterministic; snapshots in `packages/ai/test/weekly/__snapshots__`.
+- **Apply** reuses `coach-apply.ts`. `decisionWindow` gives a weekly decision the ISO week after `CoachDecision.date` (Monday..Sunday) instead of today..+6, so a Sunday tap reaches next Sunday. `stillValid` re-runs `runWeeklyGuardrails` (ramp cap included) on the current rows, with tap-time today as the past cut-off. `findAnswerText` returns the `WeeklyReviewRun.reportText` so the answer edits the report. Push, rollback and Discuss are unchanged.
+- **Storage.** Migration `9e_weekly_review`: `CoachDecisionOrigin` += `weekly`, `CoachAction` += `adjust`, and `WeeklyReviewRun` (unique `(userId, isoWeek)`, lease via `startedAt`, `coachDecisionId`, `reportText`/`reportKeyboard`, `stale`, `stageTimings`).
+
 ## Security Considerations
 
 ### Current Protections

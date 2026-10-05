@@ -2,18 +2,24 @@ import {
   coachDecisionData,
   escapeHtml,
   isDecisionExpired,
+  isoWeekRange,
   localToday,
   MSG_DECISION_EXPIRED,
+  nextIsoWeek,
   type CoachAnswer,
+  type DateRange,
   type RulesContext,
 } from '@triathlon/core';
 import {
   describeSessionChanges,
   runGuardrails,
-  type CoachAction,
+  runWeeklyGuardrails,
+  type CoachDecisionAction,
   type CoachDecisionOrigin,
+  type CoachPlanSession,
   type GuardrailConfig,
   type SessionDiff,
+  type WeeklyGuardrailConfig,
 } from '@triathlon/ai';
 import {
   buildCoachPatches,
@@ -34,7 +40,9 @@ import type { Reply } from './reply';
 export interface AnswerableDecision {
   id: string;
   origin: CoachDecisionOrigin;
-  finalAction: CoachAction;
+  /** Athlete-local day of the decision; a weekly review's changes target the week after it */
+  date: string;
+  finalAction: CoachDecisionAction;
   finalChanges: SessionDiff[];
   athleteMessage: string;
   accepted: boolean | null;
@@ -72,8 +80,14 @@ export interface CoachAnswerRepo {
   revertDecision(userId: string, decisionId: string, patches: RollbackPatch[]): Promise<void>;
   /** Records a Discuss tap on a decision not answered yet. */
   markDiscussed(userId: string, decisionId: string): Promise<void>;
-  /** The morning brief that carried the decision (HTML), null for chat or when none was saved */
-  findBriefText(userId: string, decisionId: string): Promise<string | null>;
+  /**
+   * The message that carried the decision (HTML): the morning brief or the weekly review
+   * report. Null for chat, or when none was saved.
+   */
+  findAnswerText(
+    userId: string,
+    decision: Pick<AnswerableDecision, 'id' | 'origin'>
+  ): Promise<string | null>;
 }
 
 export interface CoachAnswerDeps {
@@ -86,6 +100,8 @@ export interface CoachAnswerDeps {
   /** A failed push, or a failed rollback after it */
   onPushError(error: unknown, userId: string): void;
   guardrailConfig?: GuardrailConfig;
+  /** Weekly review decisions are re-checked with these (ramp cap included) */
+  weeklyGuardrailConfig?: WeeklyGuardrailConfig;
   /** `COACH_DECISION_TTL_HOURS`: buttons stop working this long after the decision */
   ttlHours: number;
   now(): Date;
@@ -121,8 +137,8 @@ function changeLines(
 }
 
 /**
- * The answer's result. For a morning brief it replaces the tapped brief: the stored brief
- * text with the result below it and no buttons. Otherwise it is a new message.
+ * The answer's result. For a morning brief or weekly review it replaces the tapped message:
+ * the stored text with the result below it and no buttons. Otherwise it is a new message.
  */
 async function resultReply(
   userId: string,
@@ -130,10 +146,22 @@ async function resultReply(
   result: string,
   deps: CoachAnswerDeps
 ): Promise<Reply> {
-  if (decision.origin !== 'daily') return result;
-  const brief = await deps.repo.findBriefText(userId, decision.id);
-  if (brief === null) return result;
-  return { text: brief + '\n\n' + escapeHtml(result), html: true, editTapped: true };
+  if (decision.origin === 'chat') return result;
+  const text = await deps.repo.findAnswerText(userId, decision);
+  if (text === null) return result;
+  return { text: text + '\n\n' + escapeHtml(result), html: true, editTapped: true };
+}
+
+/**
+ * The sessions a decision may change: next week (Monday..Sunday after the review) for a
+ * weekly review, otherwise today..today+6.
+ */
+export function decisionWindow(
+  decision: Pick<AnswerableDecision, 'origin' | 'date'>,
+  today: string
+): DateRange {
+  if (decision.origin === 'weekly') return isoWeekRange(nextIsoWeek(decision.date));
+  return coachPlanWindow(today);
 }
 
 async function undoPatches(
@@ -187,6 +215,20 @@ async function pushOrRollBack(
   }
 }
 
+function stillValidWeekly(
+  decision: AnswerableDecision,
+  today: string,
+  sessions: CoachPlanSession[],
+  context: RulesContext,
+  deps: CoachAnswerDeps
+): boolean {
+  const check = runWeeklyGuardrails(
+    { date: today, sessions, context, changes: decision.finalChanges, blockAdjustment: null },
+    deps.weeklyGuardrailConfig
+  );
+  return check.verdict === 'accept';
+}
+
 /** The plan may have changed since the suggestion: check the changes again on today's plan. */
 function stillValid(
   decision: AnswerableDecision,
@@ -196,6 +238,8 @@ function stillValid(
   deps: CoachAnswerDeps
 ): boolean {
   const sessions = rows.filter((r) => r.deletedAt === null).map(toCoachPlanSession);
+  if (decision.origin === 'weekly')
+    return stillValidWeekly(decision, today, sessions, context, deps);
   const check = runGuardrails(
     {
       date: today,
@@ -203,7 +247,8 @@ function stillValid(
       context,
       suggestion: {
         assessment: 'Applying an accepted suggestion',
-        action: decision.finalAction,
+        // `adjust` is weekly-only; a daily or chat decision carries an LLM action
+        action: decision.finalAction === 'adjust' ? 'reduce' : decision.finalAction,
         changes: decision.finalChanges,
         confidence: 1,
         athleteMessage: 'Applying an accepted suggestion',
@@ -226,10 +271,11 @@ async function apply(
 ): Promise<string> {
   const now = deps.now();
   const today = localToday(now, timezone);
-  const window = coachPlanWindow(today);
+  const window = decisionWindow(decision, today);
   const [rows, context] = await Promise.all([
     deps.repo.listWindow(userId, window.from, window.to),
-    deps.getRulesContext(userId, today),
+    // For a daily decision window.from is today
+    deps.getRulesContext(userId, window.from),
   ]);
 
   if (!stillValid(decision, today, rows, context, deps)) {
@@ -261,7 +307,7 @@ async function discuss(
   deps: CoachAnswerDeps
 ): Promise<Reply> {
   const today = localToday(deps.now(), timezone);
-  const window = coachPlanWindow(today);
+  const window = decisionWindow(decision, today);
   const rows = await deps.repo.listWindow(userId, window.from, window.to);
   const lines = changeLines(decision.finalChanges, rows);
   const seed = [decision.athleteMessage, ...(lines.length > 0 ? ['Proposed:', ...lines] : [])];
@@ -286,7 +332,10 @@ async function discuss(
   };
 }
 
-/** The athlete's tap on Apply / Keep plan / Discuss under a morning brief or chat suggestion. */
+/**
+ * The athlete's tap on Apply / Keep plan / Discuss under a morning brief, chat suggestion or
+ * weekly review.
+ */
 export async function handleCoachAnswer(
   user: CoachChatUser,
   input: CoachAnswerInput,

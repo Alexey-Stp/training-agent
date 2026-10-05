@@ -9,3 +9,4 @@ export * from './factory';
 export * from './context';
 export * from './suggestion';
 export * from './chat';
+export * from './weekly';

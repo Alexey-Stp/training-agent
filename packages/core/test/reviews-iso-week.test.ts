@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isoWeekKey, isoWeekRange, previousIsoWeek } from '../src/reviews/iso-week';
+import { isoWeekKey, isoWeekRange, nextIsoWeek, previousIsoWeek } from '../src/reviews/iso-week';
 
 describe('isoWeekKey', () => {
   it('numbers a mid-year date', () => {
@@ -40,5 +40,14 @@ describe('previousIsoWeek', () => {
     expect(previousIsoWeek('2026-10-05')).toBe('2026-W40');
     expect(previousIsoWeek('2026-10-11')).toBe('2026-W40');
     expect(previousIsoWeek('2027-01-06')).toBe('2026-W53');
+  });
+});
+
+describe('nextIsoWeek', () => {
+  it('is the week after the one containing the date', () => {
+    expect(nextIsoWeek('2026-10-04')).toBe('2026-W41');
+    expect(nextIsoWeek('2026-09-28')).toBe('2026-W41');
+    expect(nextIsoWeek('2026-12-27')).toBe('2026-W53');
+    expect(nextIsoWeek('2027-01-03')).toBe('2027-W01');
   });
 });
