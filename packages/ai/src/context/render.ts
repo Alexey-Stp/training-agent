@@ -1,7 +1,8 @@
-import { addDaysIso, type Race } from '@triathlon/core';
+import { addDaysIso, sorenessLabel, type Race } from '@triathlon/core';
 import {
   datesInRange,
   daysBetween,
+  hasDeviceData,
   HRV_BASELINE_DAYS,
   HRV_MIN_SAMPLES,
   UPCOMING_DAYS,
@@ -98,10 +99,6 @@ export function renderSeason(ctx: CoachContext): string {
   return lines.join('\n');
 }
 
-function hasDeviceData(day: WellnessDay): boolean {
-  return [day.hrv, day.restingHr, day.sleepHours, day.sleepScore, day.tsb].some((v) => v !== null);
-}
-
 function todayLines(today: WellnessDay | null, date: string): string[] {
   const device =
     today && hasDeviceData(today)
@@ -112,7 +109,7 @@ function todayLines(today: WellnessDay | null, date: string): string[] {
   const checkIn =
     readiness === null && soreness === null
       ? 'Check-in: none today.'
-      : `Check-in: readiness ${num(readiness)}/5, soreness ${num(soreness)}.`;
+      : `Check-in: readiness ${num(readiness)}/5, soreness ${sorenessLabel(soreness) ?? num(soreness)}.`;
   return [device, checkIn];
 }
 

@@ -37,8 +37,14 @@ import type { CoachChatRepo } from './coach-chat-command';
 import type { CoachAnswerRepo } from './coach-apply';
 import type { CoachPatch, RollbackPatch } from './coach-plan';
 import type { InlineButton } from './reply';
-import type { DailyBriefRun, DailyBriefRunRepo, StageTimings } from './daily-loop/run-store';
+import type {
+  DailyBriefRun,
+  DailyBriefRunRepo,
+  DailyBriefStatus,
+  StageTimings,
+} from './daily-loop/run-store';
 import type { BriefProfileRepo } from './daily-loop/scheduler';
+import type { CheckInRepo } from './daily-loop/checkin';
 import {
   WELLNESS_DEVICE_FIELDS,
   type WellnessDeviceField,
@@ -238,6 +244,25 @@ export const wellnessRepo: WellnessRepo = {
         });
       }
       await tx.icuConnection.update({ where: { userId }, data: { lastWellnessSyncAt: cursor } });
+    });
+  },
+};
+
+const CHECKIN_COLUMNS = { r: 'subjectiveReadiness', s: 'soreness' } as const;
+
+export const checkInRepo: CheckInRepo = {
+  async recordCheckIn(userId, date, field, value) {
+    const column = CHECKIN_COLUMNS[field];
+    // The day may have no Wellness row yet (that is why the check-in was asked)
+    await prisma.wellness.createMany({ data: [{ userId, date }], skipDuplicates: true });
+    // First answer wins: a double tap or a second button never overwrites it
+    await prisma.wellness.updateMany({
+      where: { userId, date, [column]: null },
+      data: { [column]: value },
+    });
+    return prisma.wellness.findUniqueOrThrow({
+      where: { userId_date: { userId, date } },
+      select: { subjectiveReadiness: true, soreness: true },
     });
   },
 };
@@ -812,6 +837,13 @@ export const briefProfileRepo: BriefProfileRepo = {
   },
 };
 
+function claimRefusal(
+  status: DailyBriefStatus
+): 'already_sent' | 'in_progress' | 'awaiting_checkin' {
+  if (status === 'sent') return 'already_sent';
+  return status === 'awaiting_checkin' ? 'awaiting_checkin' : 'in_progress';
+}
+
 function toDailyBriefRun(row: DailyBriefRunRow): DailyBriefRun {
   return {
     id: row.id,
@@ -822,20 +854,24 @@ function toDailyBriefRun(row: DailyBriefRunRow): DailyBriefRun {
     stale: row.stale,
     dataAsOf: row.dataAsOf,
     stageTimings: row.stageTimings as StageTimings,
+    checkInSentAt: row.checkInSentAt,
   };
 }
 
 export const dailyBriefRunRepo: DailyBriefRunRepo = {
-  async claim(userId, date, now, leaseMs) {
+  async claim(userId, date, now, leaseMs, opts = {}) {
     // skipDuplicates: the (userId, date) row may exist from an earlier trigger or attempt
     await prisma.dailyBriefRun.createMany({ data: [{ userId, date }], skipDuplicates: true });
+    const claimable: DailyBriefStatus[] = opts.continuation
+      ? ['pending', 'failed', 'awaiting_checkin']
+      : ['pending', 'failed'];
     // One conditional update takes the run over, so two concurrent triggers can't both win
     const { count } = await prisma.dailyBriefRun.updateMany({
       where: {
         userId,
         date,
         OR: [
-          { status: { in: ['pending', 'failed'] } },
+          { status: { in: claimable } },
           { status: 'running', startedAt: { lt: new Date(now.getTime() - leaseMs) } },
         ],
       },
@@ -845,7 +881,28 @@ export const dailyBriefRunRepo: DailyBriefRunRepo = {
       where: { userId_date: { userId, date } },
     });
     if (count > 0) return { status: 'claimed', run: toDailyBriefRun(row) };
-    return { status: row.status === 'sent' ? 'already_sent' : 'in_progress' };
+    return { status: claimRefusal(row.status) };
+  },
+
+  async saveCheckIn(id, checkIn) {
+    await prisma.dailyBriefRun.update({
+      where: { id },
+      data: {
+        status: 'awaiting_checkin',
+        checkInMessageId: checkIn.messageId,
+        checkInSentAt: checkIn.sentAt,
+        stale: checkIn.stale,
+        dataAsOf: checkIn.dataAsOf,
+        stageTimings: toJson(checkIn.stageTimings),
+      },
+    });
+  },
+
+  findByCheckInMessage(userId, messageId) {
+    return prisma.dailyBriefRun.findFirst({
+      where: { userId, checkInMessageId: messageId },
+      select: { id: true, date: true, status: true },
+    });
   },
 
   async saveBrief(id, brief) {

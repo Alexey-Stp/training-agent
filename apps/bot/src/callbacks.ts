@@ -14,6 +14,7 @@ import {
 } from './season-dialog';
 import { routeSeasonDecision, type DecisionJob } from './season-callbacks';
 import { routeCoachDecision } from './coach-callbacks';
+import { checkInJobId, routeCheckIn } from './checkin-callbacks';
 
 interface CallbackLogger {
   info(obj: object, msg: string): void;
@@ -128,6 +129,31 @@ async function applyDecisionTap(
   await ctx.answerCallbackQuery({ text: job.toast });
 }
 
+/** Check-in button: enqueue the answer; the worker edits the message (no TTL, the run decides). */
+async function applyCheckInTap(
+  ctx: Context,
+  deps: CallbackDeps,
+  job: DecisionJob,
+  messageId: number
+) {
+  const userId = ctx.from?.id;
+  const chatId = ctx.chat?.id;
+  if (userId === undefined || chatId === undefined) return;
+  await deps.enqueue(
+    {
+      telegramChatId: chatId,
+      telegramUserId: userId,
+      messageId,
+      commandName: job.commandName,
+      args: job.args,
+      rawText: '',
+    },
+    { jobId: checkInJobId(chatId, messageId, job) }
+  );
+  deps.logger.info({ userId, chatId, messageId, command: job.commandName }, 'Job enqueued');
+  await ctx.answerCallbackQuery({ text: job.toast });
+}
+
 /**
  * A coach button on a message older than the TTL: nothing is enqueued, the buttons go and the
  * athlete is pointed to /plan today. The worker checks the decision's age too (queued jobs).
@@ -138,13 +164,21 @@ async function expiredCoachTap(ctx: Context, deps: CallbackDeps) {
   await ctx.reply(MSG_DECISION_EXPIRED);
 }
 
-/** Inline buttons: coach Apply/Keep/Discuss, the season wizard steps and the season preview. */
+/**
+ * Inline buttons: morning check-in, coach Apply/Keep/Discuss, the season wizard steps and the
+ * season preview.
+ */
 export function registerCallbackHandlers(bot: Bot, deps: CallbackDeps): void {
   bot.on('callback_query:data', async (ctx) => {
     try {
       const { data, message } = ctx.callbackQuery;
       if (!message) {
         await ctx.answerCallbackQuery({ text: WIZARD_EXPIRED });
+        return;
+      }
+      const checkIn = routeCheckIn(data);
+      if (checkIn) {
+        await applyCheckInTap(ctx, deps, checkIn, message.message_id);
         return;
       }
       const coach = routeCoachDecision(data);

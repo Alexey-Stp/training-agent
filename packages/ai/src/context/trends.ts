@@ -78,6 +78,11 @@ export function hrvBaseline(rows: WellnessDay[], date: string): HrvBaseline {
   return { status: 'ok', samples: samples.length, mean: m, sd, today, low: today < m - sd };
 }
 
+/** True when the day has any device/ICU reading (the athlete check-in alone does not count). */
+export function hasDeviceData(day: WellnessDay): boolean {
+  return [day.hrv, day.restingHr, day.sleepHours, day.sleepScore, day.tsb].some((v) => v !== null);
+}
+
 export function emptyWellnessDay(date: string): WellnessDay {
   return {
     date,

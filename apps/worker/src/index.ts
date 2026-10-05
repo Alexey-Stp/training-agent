@@ -3,6 +3,7 @@ import { Worker, Job, Queue } from 'bullmq';
 import { Bot } from 'grammy';
 import Redis from 'ioredis';
 import {
+  CHECKIN_ANSWER_COMMAND,
   COACH_APPLY_COMMAND,
   COACH_CHAT_COMMAND,
   COACH_DISCUSS_COMMAND,
@@ -37,6 +38,7 @@ import {
   dailyContextDeps,
   briefProfileRepo,
   dailyBriefRunRepo,
+  checkInRepo,
 } from './db';
 import {
   handleStart,
@@ -89,12 +91,14 @@ import {
 import {
   DAILY_BRIEF_QUEUE,
   combineSchedulers,
+  createCheckInContinuation,
   createDailyBriefScheduler,
   reconcileDailyBriefSchedulers,
   type DailyBriefJob,
   type DailyBriefSchedulerDeps,
 } from './daily-loop/scheduler';
 import { runDailyBrief, type DailyBriefDeps } from './daily-loop/pipeline';
+import { handleCheckInAnswer, type CheckInAnswerDeps } from './daily-loop/checkin-answer';
 
 const config = getConfig();
 
@@ -126,6 +130,16 @@ const briefSchedulerDeps: DailyBriefSchedulerDeps = {
 };
 const briefQueue = new Queue<DailyBriefJob>(DAILY_BRIEF_QUEUE, { connection: redisConnection });
 const dailyBriefScheduler = createDailyBriefScheduler(briefQueue, briefSchedulerDeps);
+// Morning check-in: the brief waits for the answers at most this long
+const checkInContinuation = createCheckInContinuation(
+  briefQueue,
+  config.DAILY_CHECKIN_TIMEOUT_MINUTES * 60_000
+);
+const checkInAnswerDeps: CheckInAnswerDeps = {
+  runs: dailyBriefRunRepo,
+  wellness: checkInRepo,
+  resume: (userId, date) => checkInContinuation.resume(userId, date),
+};
 
 const activitySyncDeps: ActivitySyncDeps = {
   repo: activityRepo,
@@ -302,6 +316,18 @@ const worker = new Worker<CommandJob>(
     try {
       // Ensure user exists
       const user = await ensureUser(telegramUserId);
+
+      // Check-in taps skip the ProcessedMessage check: both questions sit on one message, so
+      // the second answer has the same messageId. The write itself is idempotent (first wins).
+      if (commandName === CHECKIN_ANSWER_COMMAND) {
+        const reply = await handleCheckInAnswer(
+          user.id,
+          { args, telegramMessageId: messageId },
+          checkInAnswerDeps
+        );
+        await sendReply(telegramChatId, messageId, reply);
+        return;
+      }
 
       // Check if message already processed (idempotency)
       const alreadyProcessed = await checkMessageProcessed(user.id, messageId);
@@ -564,6 +590,7 @@ const dailyBriefDeps: DailyBriefDeps = {
   decisions: coachDecisionRepo,
   tokenBudget: aiConfig.AI_CONTEXT_TOKEN_BUDGET,
   sendMessage: (chatId, text, options) => api.sendMessage(chatId, text, options),
+  scheduleCheckInTimeout: (userId, date) => checkInContinuation.schedule(userId, date),
   logger,
   now: () => new Date(),
 };
@@ -571,7 +598,8 @@ const dailyBriefDeps: DailyBriefDeps = {
 const briefWorker = config.DAILY_BRIEF_ENABLED
   ? new Worker<DailyBriefJob>(
       DAILY_BRIEF_QUEUE,
-      (job: Job<DailyBriefJob>) => runDailyBrief(job.data.userId, dailyBriefDeps),
+      (job: Job<DailyBriefJob>) =>
+        runDailyBrief(job.data.userId, dailyBriefDeps, { checkInDate: job.data.checkInDate }),
       { connection: redisConnection, concurrency: 2 }
     )
   : null;

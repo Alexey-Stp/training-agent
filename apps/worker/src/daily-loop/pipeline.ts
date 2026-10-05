@@ -1,10 +1,12 @@
 import { performance } from 'node:perf_hooks';
 import { UnrecoverableError } from 'bullmq';
 import { GrammyError } from 'grammy';
-import { localToday, type RulesContext } from '@triathlon/core';
+import { addDaysIso, localToday, type RulesContext } from '@triathlon/core';
 import {
   buildDailyContext,
   DAILY_PROMPT_VERSION,
+  HRV_BASELINE_DAYS,
+  hrvBaseline,
   runCoachSuggestion,
   runRulesFallback,
   type CoachDecisionRecord,
@@ -19,6 +21,7 @@ import {
 import { coachPlanWindow, toCoachPlanSession } from '../coach-plan';
 import type { IcuConnectionRecord } from '../icu-connect';
 import { toTelegramMessage, type RichReply, type TelegramMessageOptions } from '../reply';
+import { checkInReason, renderCheckIn, type CheckInReason } from './checkin';
 import { readinessVerdict } from './readiness';
 import { renderBrief } from './render';
 import type { DailyBriefRun, DailyBriefRunRepo, StageTimings } from './run-store';
@@ -27,7 +30,7 @@ import type { BriefProfileRepo } from './scheduler';
 /** How long a running pipeline holds the day's run before a retry may take it over */
 export const BRIEF_LEASE_MS = 5 * 60_000;
 
-export type BriefStage = 'wellness' | 'activity' | 'context' | 'suggest' | 'send';
+export type BriefStage = 'wellness' | 'activity' | 'checkin' | 'context' | 'suggest' | 'send';
 
 export interface BriefLogger {
   info(obj: object, msg: string): void;
@@ -52,13 +55,24 @@ export interface DailyBriefDeps {
   guardrailConfig?: GuardrailConfig;
   /** `AI_CONTEXT_TOKEN_BUDGET` */
   tokenBudget?: number;
-  sendMessage(chatId: number, text: string, options: TelegramMessageOptions): Promise<unknown>;
+  sendMessage(
+    chatId: number,
+    text: string,
+    options: TelegramMessageOptions
+  ): Promise<{ message_id: number }>;
+  /**
+   * Queues the continuation that finishes the brief after the check-in timeout. Idempotent per
+   * (userId, date); an answered check-in promotes it early.
+   */
+  scheduleCheckInTimeout(userId: string, date: string): Promise<void>;
   logger: BriefLogger;
   now(): Date;
 }
 
 export type DailyBriefResult =
-  | { status: 'skipped'; reason: 'no_profile' | 'already_sent' }
+  | { status: 'skipped'; reason: 'no_profile' | 'already_sent' | 'awaiting_checkin' }
+  /** The check-in went out; the continuation job sends the brief */
+  | { status: 'awaiting_checkin'; date: string; reason: CheckInReason }
   | {
       status: 'sent';
       date: string;
@@ -139,14 +153,93 @@ async function dataAsOf(
   return new Date(Math.min(...times));
 }
 
+interface Freshness {
+  /** An ICU sync failed: data as of `dataAsOf` (null: never synced) */
+  stale: boolean;
+  dataAsOf: Date | null;
+}
+
+/** Stages wellness → activity; a failed sync only makes the data stale. */
+async function syncAll(ctx: RunCtx): Promise<Freshness> {
+  const { deps } = ctx;
+  const wellnessOk = await syncStage(ctx, 'wellness', (id) => deps.syncWellness(id));
+  const activityOk = await syncStage(ctx, 'activity', (id) => deps.syncActivities(id));
+  const stale = !wellnessOk || !activityOk;
+  const asOf = stale ? await dataAsOf(ctx, { wellness: !wellnessOk, activity: !activityOk }) : null;
+  return { stale, dataAsOf: asOf };
+}
+
+/** Telegram won't ever take this message: the bot is blocked or the chat is gone. */
+function isPermanentSendError(error: unknown): boolean {
+  return error instanceof GrammyError && (error.error_code === 403 || error.error_code === 400);
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.name + ': ' + error.message : String(error);
+}
+
+/** A send Telegram will never accept fails the job without retries. */
+async function sendOrFail<T>(send: () => Promise<T>): Promise<T> {
+  try {
+    return await send();
+  } catch (error) {
+    if (isPermanentSendError(error)) throw new UnrecoverableError(errorText(error));
+    throw error;
+  }
+}
+
+/**
+ * Sends the check-in when today's data calls for it and records it on the run; null when the
+ * brief can go out straight away. The timeout is queued before the send, so a check-in never
+ * goes out without a continuation behind it.
+ */
+async function askCheckIn(
+  ctx: RunCtx,
+  run: DailyBriefRun,
+  chatId: number,
+  freshness: Freshness
+): Promise<CheckInReason | null> {
+  const { deps, userId, date } = ctx;
+  const from = addDaysIso(date, -HRV_BASELINE_DAYS);
+  const rows = await deps.context.wellness.listRange(userId, from, date);
+  const today = rows.find((row) => row.date === date) ?? null;
+  const reason = checkInReason(today, hrvBaseline(rows, date));
+  if (reason === null) return null;
+
+  await deps.scheduleCheckInTimeout(userId, date);
+  const message = toTelegramMessage(
+    renderCheckIn({
+      subjectiveReadiness: today?.subjectiveReadiness ?? null,
+      soreness: today?.soreness ?? null,
+    })
+  );
+  const sent = await sendOrFail(() => deps.sendMessage(chatId, message.text, message.options));
+  await deps.runs.saveCheckIn(run.id, {
+    messageId: sent.message_id,
+    sentAt: deps.now(),
+    ...freshness,
+    stageTimings: { ...run.stageTimings, ...ctx.timings },
+  });
+  return reason;
+}
+
+/** The check-in went out and the athlete answered neither question. */
+async function checkInMissed(ctx: RunCtx, run: DailyBriefRun): Promise<boolean> {
+  if (run.checkInSentAt === null) return false;
+  const rows = await ctx.deps.context.wellness.listRange(ctx.userId, ctx.date, ctx.date);
+  const today = rows.find((row) => row.date === ctx.date);
+  return (today?.subjectiveReadiness ?? null) === null && (today?.soreness ?? null) === null;
+}
+
 interface Inputs {
   daily: DailyContextResult | null;
   planned: PlannedSessionSummary[];
   rules: RulesContext;
+  checkInMissed: boolean;
 }
 
 /** The daily context, plan window and rules input; a failed context build leaves `daily` null. */
-function loadInputs(ctx: RunCtx): Promise<Inputs> {
+function loadInputs(ctx: RunCtx, run: DailyBriefRun): Promise<Inputs> {
   const { deps, userId, date } = ctx;
   const window = coachPlanWindow(date);
   const daily = buildDailyContext(deps.context, userId, date, {
@@ -159,7 +252,13 @@ function loadInputs(ctx: RunCtx): Promise<Inputs> {
     daily,
     deps.context.planned.listRange(userId, window.from, window.to),
     deps.getRulesContext(userId, date),
-  ]).then(([d, planned, rules]) => ({ daily: d, planned, rules }));
+    checkInMissed(ctx, run),
+  ]).then(([d, planned, rules, missed]) => ({
+    daily: d,
+    planned,
+    rules,
+    checkInMissed: missed,
+  }));
 }
 
 /** LLM suggestion + guardrails (rules engine alone without a context); one CoachDecision. */
@@ -194,19 +293,21 @@ async function decide(
   return { record, id: written.id };
 }
 
-/** Stages wellness → activity → context → suggest; stores the rendered brief on the run. */
+interface PreparedBrief {
+  brief: RichReply;
+  source: CoachDecisionSource;
+  stale: boolean;
+}
+
+/** Stages context → suggest; stores the rendered brief on the run. */
 async function prepareBrief(
   ctx: RunCtx,
   run: DailyBriefRun,
-  timezone: string
-): Promise<{ brief: RichReply; source: CoachDecisionSource; stale: boolean }> {
+  timezone: string,
+  freshness: Freshness
+): Promise<PreparedBrief> {
   const { deps } = ctx;
-  const wellnessOk = await syncStage(ctx, 'wellness', (id) => deps.syncWellness(id));
-  const activityOk = await syncStage(ctx, 'activity', (id) => deps.syncActivities(id));
-  const stale = !wellnessOk || !activityOk;
-  const asOf = stale ? await dataAsOf(ctx, { wellness: !wellnessOk, activity: !activityOk }) : null;
-
-  const inputs = await stage(ctx, 'context', () => loadInputs(ctx));
+  const inputs = await stage(ctx, 'context', () => loadInputs(ctx, run));
   const { record, id } = await stage(ctx, 'suggest', () => decide(ctx, inputs));
 
   const brief = renderBrief({
@@ -219,18 +320,42 @@ async function prepareBrief(
       inputs.rules.todayWellness,
       inputs.daily?.context.wellness.hrv ?? null
     ),
-    stale,
-    dataAsOf: asOf,
+    stale: freshness.stale,
+    dataAsOf: freshness.dataAsOf,
+    checkInMissed: inputs.checkInMissed,
   });
   await deps.runs.saveBrief(run.id, {
     coachDecisionId: id,
     briefText: brief.text,
     briefKeyboard: brief.keyboard ?? null,
-    stale,
-    dataAsOf: asOf,
+    stale: freshness.stale,
+    dataAsOf: freshness.dataAsOf,
     stageTimings: ctx.timings,
   });
-  return { brief, source: record.source, stale };
+  return { brief, source: record.source, stale: freshness.stale };
+}
+
+type FreshOutcome =
+  { kind: 'checkin'; reason: CheckInReason } | { kind: 'brief'; prepared: PreparedBrief };
+
+/**
+ * A new run syncs and may stop at the check-in. A run whose check-in is out reuses the
+ * freshness of that sync and only finishes the brief.
+ */
+async function prepareFresh(
+  ctx: RunCtx,
+  run: DailyBriefRun,
+  chatId: number,
+  timezone: string
+): Promise<FreshOutcome> {
+  if (run.checkInSentAt !== null) {
+    const freshness = { stale: run.stale, dataAsOf: run.dataAsOf };
+    return { kind: 'brief', prepared: await prepareBrief(ctx, run, timezone, freshness) };
+  }
+  const freshness = await syncAll(ctx);
+  const reason = await stage(ctx, 'checkin', () => askCheckIn(ctx, run, chatId, freshness));
+  if (reason !== null) return { kind: 'checkin', reason };
+  return { kind: 'brief', prepared: await prepareBrief(ctx, run, timezone, freshness) };
 }
 
 function storedBrief(run: DailyBriefRun): RichReply {
@@ -239,23 +364,11 @@ function storedBrief(run: DailyBriefRun): RichReply {
   return brief;
 }
 
-/** Telegram won't ever take this message: the bot is blocked or the chat is gone. */
-function isPermanentSendError(error: unknown): boolean {
-  return error instanceof GrammyError && (error.error_code === 403 || error.error_code === 400);
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.name + ': ' + error.message : String(error);
-}
-
 async function sendBrief(ctx: RunCtx, chatId: number, brief: RichReply): Promise<void> {
   const message = toTelegramMessage(brief);
-  try {
-    await stage(ctx, 'send', () => ctx.deps.sendMessage(chatId, message.text, message.options));
-  } catch (error) {
-    if (isPermanentSendError(error)) throw new UnrecoverableError(errorText(error));
-    throw error;
-  }
+  await stage(ctx, 'send', () =>
+    sendOrFail(() => ctx.deps.sendMessage(chatId, message.text, message.options))
+  );
 }
 
 async function runClaimed(
@@ -265,7 +378,14 @@ async function runClaimed(
   timezone: string
 ): Promise<DailyBriefResult> {
   const resumed = run.briefText !== null;
-  const prepared = resumed ? null : await prepareBrief(ctx, run, timezone);
+  let prepared: PreparedBrief | null = null;
+  if (!resumed) {
+    const outcome = await prepareFresh(ctx, run, chatId, timezone);
+    if (outcome.kind === 'checkin') {
+      return { status: 'awaiting_checkin', date: ctx.date, reason: outcome.reason };
+    }
+    prepared = outcome.prepared;
+  }
   await sendBrief(ctx, chatId, prepared?.brief ?? storedBrief(run));
   await ctx.deps.runs.markSent(run.id, ctx.deps.now(), { ...run.stageTimings, ...ctx.timings });
   return {
@@ -278,10 +398,20 @@ async function runClaimed(
   };
 }
 
+export interface DailyBriefOptions {
+  /** Set by the check-in continuation job: the local date its check-in was asked for */
+  checkInDate?: string;
+}
+
 /**
- * The morning pipeline of one athlete: wellness sync → activity sync → daily context →
- * coach suggestion (LLM + guardrails) → brief. Runs at most once per athlete and local day:
- * the `DailyBriefRun` row (userId, date) is claimed first, and a sent run is never redone.
+ * The morning pipeline of one athlete: wellness sync → activity sync → check-in (only when
+ * today's device wellness is missing or HRV is off its baseline) → daily context → coach
+ * suggestion (LLM + guardrails) → brief. Runs at most once per athlete and local day: the
+ * `DailyBriefRun` row (userId, date) is claimed first, and a sent run is never redone.
+ *
+ * Check-in: the run stops after sending it (`awaiting_checkin`). A delayed continuation job
+ * (`options.checkInDate`), promoted as soon as both answers are in, finishes the brief with
+ * the freshness of the first run's sync; until then other triggers of that day are skipped.
  *
  * Degradation: a failed ICU sync leaves a stale-data note; an LLM failure (or a failed context
  * build) gives the rules-engine recommendation with `CoachDecision.source = 'fallback'`. A
@@ -290,15 +420,18 @@ async function runClaimed(
  */
 export async function runDailyBrief(
   userId: string,
-  deps: DailyBriefDeps
+  deps: DailyBriefDeps,
+  options: DailyBriefOptions = {}
 ): Promise<DailyBriefResult> {
   const profile = await deps.profiles.findBriefProfile(userId);
   if (!profile) return { status: 'skipped', reason: 'no_profile' };
 
   const now = deps.now();
-  const date = localToday(now, profile.timezone);
-  const claim = await deps.runs.claim(userId, date, now, BRIEF_LEASE_MS);
+  const continuation = options.checkInDate !== undefined;
+  const date = options.checkInDate ?? localToday(now, profile.timezone);
+  const claim = await deps.runs.claim(userId, date, now, BRIEF_LEASE_MS, { continuation });
   if (claim.status === 'already_sent') return { status: 'skipped', reason: 'already_sent' };
+  if (claim.status === 'awaiting_checkin') return { status: 'skipped', reason: 'awaiting_checkin' };
   if (claim.status === 'in_progress') throw new BriefInProgressError(userId, date);
 
   const ctx: RunCtx = { userId, date, deps, timings: {} };
