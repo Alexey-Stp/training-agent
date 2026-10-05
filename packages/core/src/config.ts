@@ -54,6 +54,12 @@ const envSchema = z.object({
     .default('20:30'),
   // A matched session whose duration is off by more than this many percent gets a close-out note
   CLOSEOUT_DEVIATION_THRESHOLD_PCT: z.coerce.number().positive().default(25),
+  // Weekly stats: every Monday at this local time, planned vs actual of the previous ISO week
+  WEEKLY_STATS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  WEEKLY_STATS_TIME: z.string().regex(BRIEF_TIME_RE, 'must be HH:mm (24h)').default('06:00'),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

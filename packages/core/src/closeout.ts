@@ -161,7 +161,8 @@ function powerZone(avgPower: number, ftp: number): Intensity {
   return zone?.zone ?? Intensity.z5;
 }
 
-function hrZone(avgHr: number, lthr: number): Intensity {
+/** Zone of an average heart rate against LTHR (Friel bands). */
+export function hrIntensity(avgHr: number, lthr: number): Intensity {
   const ratio = avgHr / lthr;
   const band = HR_BANDS.find(([, upper]) => ratio < upper);
   return band?.[0] ?? Intensity.z5;
@@ -179,7 +180,8 @@ export function guessIntensity(
   if (activity.sport === Sport.bike && activity.avgPower !== null && ftp !== null && ftp > 0) {
     return powerZone(activity.avgPower, ftp);
   }
-  if (activity.avgHr !== null && lthr !== null && lthr > 0) return hrZone(activity.avgHr, lthr);
+  if (activity.avgHr !== null && lthr !== null && lthr > 0)
+    return hrIntensity(activity.avgHr, lthr);
   return null;
 }
 
