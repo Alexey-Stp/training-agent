@@ -699,6 +699,45 @@ runWeeklyReviewJob (apps/worker/src/reviews/weekly-review.ts)
 - **Apply** reuses `coach-apply.ts`. `decisionWindow` gives a weekly decision the ISO week after `CoachDecision.date` (Monday..Sunday) instead of today..+6, so a Sunday tap reaches next Sunday. `stillValid` re-runs `runWeeklyGuardrails` (ramp cap included) on the current rows, with tap-time today as the past cut-off. `findAnswerText` returns the `WeeklyReviewRun.reportText` so the answer edits the report. Push, rollback and Discuss are unchanged.
 - **Storage.** Migration `9e_weekly_review`: `CoachDecisionOrigin` += `weekly`, `CoachAction` += `adjust`, and `WeeklyReviewRun` (unique `(userId, isoWeek)`, lease via `startedAt`, `coachDecisionId`, `reportText`/`reportKeyboard`, `stale`, `stageTimings`).
 
+### Block review and season re-projection (implemented)
+
+```
+block-review queue: one Sunday cron scheduler per linked athlete (same factory and reconcile as the weekly review)
+  key block-review:<userId>, pattern '<m> <h> * * 0' from BLOCK_REVIEW_TIME, tz Profile.timezone
+/race move <date> <new date> on the active A-race → one-off job {trigger: 'race_move', raceId, previousDate, newDate}
+        │
+        ▼
+runBlockReviewJob (apps/worker/src/reviews/block-review.ts)
+  active season (seasonReprojectRepo.findActiveRecord: id, updatedAt, weeklyHoursAvailable, weakSport)
+  block_end: today must be the last day of a block (not taper/race) → key block:<order>, freeze = today
+  race_move: the A-race must still be that race at the new date → key race:<raceId>:<date>,
+             freeze = this Sunday, reviewed block = the current block cut to its elapsed weeks
+  claim BlockReviewRun (userId, seasonPlanId, key)   ─ already sent → skip; lease held → retry later
+  stored reportText? ─► resend it (no LLM call, no second CoachDecision)
+  activity sync (failure → stale note) → runWeeklyStats(this week) → weeklyStatsRepo.listRange(block weeks)
+  core computeBlockVerdict → seed (reprojectionSeed, or the last 4 weeks' hours on a race move)
+  core reprojectSeason(season, aRace, freeze, seed) → candidate (SeasonGenerationError → no candidate)
+  ai runBlockReview: prompts/block-v1.md → requestStructured (one repair) → keep | reproject
+        → CoachDecision (origin 'block', finalAction adjust | keep, no session changes)
+  renderBlockReport (verdict, old-vs-new tables, Confirm/Decline) → saveReport (proposal, seasonUpdatedAt) → send
+        │
+        ▼
+block_confirm / block_decline (br:c|d:<runId>) → handleBlockReviewAnswer (apps/worker/src/block-review-apply.ts)
+  decline → CoachDecision accepted=false, userAction keep; the season is untouched
+  confirm → seasonReprojectRepo.applyReprojection in one transaction:
+              decision accepted (only while unanswered) + SeasonPlan updateMany WHERE updatedAt = seasonUpdatedAt AND aRace.date = proposal.raceDate
+              (else rolled back → 'stale', recorded as a declined apply)
+              → truncate the cut block, delete blocks after the frozen ones, insert the new ones
+          → queue season-rolling-publish (writes T+1 onward only) → edit the report with the result
+```
+
+- **Verdict** (core `reviews/block-verdict.ts`, pure). `volumeAchievedPct` = actual minutes / (`targetWeeklyHours` × 60 × weeks with stats); weeks without a `WeeklyStats` row count neither way and are listed. CTL from the first week's `load.start` to the last week's `load.end`, `ctlGap` against `targetCtl` (null today: the generator doesn't set it). `complianceTrend` is the least-squares change over the weekly compliance values, flat within ±5 points.
+- **Seed** (`reprojectionSeed`). The next block's planned `targetWeeklyHours` times the share achieved, capped at one ramp step above plan. 70% achieved → the next block's first load week is 70% of its planned level (then clamped by `startingLoad` to ≥ 50% of the available hours).
+- **Re-projection** (core `season/reproject.ts`, pure). Blocks that end by the freeze date are copied byte for byte; a block spanning it is cut to its elapsed weeks. If the race week is unchanged and the freeze sits on a block boundary, the remaining blocks keep their types and lengths; otherwise the remaining whole weeks are allocated like a new season (`allocateBlockLengths`, or peak + taper + race on a runway shorter than the generator's minimum), and phases the season is already past become the current phase (never past `peak`, so a later race after the taper started gets a peak, not a longer taper). Volumes come from `buildWeeklyVolumes` with `firstIndex` = the season week after the freeze, so the 3:1 recovery cadence continues; targets use the shared `season-weeks.ts` helpers. The result passes `validateSeasonPlan`. The fast-check property test asserts the ramp cap, validity and the unchanged frozen prefix.
+- **Keep or re-project** (ai `block/run.ts`). The LLM recommends; a race move or volume outside 100 ± `BLOCK_REVIEW_REPROJECT_THRESHOLD_PCT` forces the proposal (`verdict: 'clamp'` when it overrides a `keep`). LLM down or invalid twice → `fallbackBlockReview(verdict)` and the threshold rule. No candidate → keep with a note. Prompt snapshots in `packages/ai/test/block/__snapshots__`.
+- **Answers.** Block decisions are not answerable through `cc:` (coach-apply returns not found); `findAnswerText` reads `BlockReviewRun.reportText` for them. The bot routes `br:` taps like the season buttons (no client-side TTL); the worker enforces `BLOCK_REVIEW_TTL_HOURS`.
+- **Storage.** Migration `9f_block_review`: `CoachDecisionOrigin` += `block`, `SeasonPlan.weeklyHoursAvailable`/`weakSport` (the wizard's answers; legacy seasons fall back to the busiest block's hours), and `BlockReviewRun` (unique `(userId, seasonPlanId, key)`, `trigger`, lease via `startedAt`, `verdict`, `proposedBlocks` = `{raceDate, startDate, frozenCount, truncated, blocks}`, `freezeThrough`, `seasonUpdatedAt`, report fields, cascade with the season and the user).
+
 ## Security Considerations
 
 ### Current Protections

@@ -14,6 +14,7 @@ import {
 } from './season-dialog';
 import { routeSeasonDecision, type DecisionJob } from './season-callbacks';
 import { routeCoachDecision } from './coach-callbacks';
+import { routeBlockReview } from './block-callbacks';
 import { checkInJobId, routeCheckIn } from './checkin-callbacks';
 
 interface CallbackLogger {
@@ -165,8 +166,8 @@ async function expiredCoachTap(ctx: Context, deps: CallbackDeps) {
 }
 
 /**
- * Inline buttons: morning check-in, coach Apply/Keep/Discuss, the season wizard steps and the
- * season preview.
+ * Inline buttons: morning check-in, coach Apply/Keep/Discuss, the season wizard steps, the
+ * season preview and block review Confirm/Decline.
  */
 export function registerCallbackHandlers(bot: Bot, deps: CallbackDeps): void {
   bot.on('callback_query:data', async (ctx) => {
@@ -187,7 +188,7 @@ export function registerCallbackHandlers(bot: Bot, deps: CallbackDeps): void {
         await expiredCoachTap(ctx, deps);
         return;
       }
-      const decision = coach ?? routeSeasonDecision(data);
+      const decision = coach ?? routeSeasonDecision(data) ?? routeBlockReview(data);
       if (decision) {
         await applyDecisionTap(ctx, deps, decision, message.message_id);
         return;

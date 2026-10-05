@@ -68,6 +68,17 @@ const envSchema = z.object({
   WEEKLY_REVIEW_TIME: z.string().regex(BRIEF_TIME_RE, 'must be HH:mm (24h)').default('19:00'),
   // Next-week changes may add at most this % to next week's planned minutes (catch-up ramp cap)
   WEEKLY_REVIEW_MAX_RAMP_PCT: z.coerce.number().min(0).max(50).default(8),
+  // Block review: on the last day of a training block (a Sunday), at this local time, a verdict
+  // against the block targets and, when needed, a re-projection of the remaining blocks
+  BLOCK_REVIEW_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  BLOCK_REVIEW_TIME: z.string().regex(BRIEF_TIME_RE, 'must be HH:mm (24h)').default('19:30'),
+  // Volume achieved outside 100 ± this % always proposes a re-projection, whatever the AI says
+  BLOCK_REVIEW_REPROJECT_THRESHOLD_PCT: z.coerce.number().min(0).max(50).default(15),
+  // Confirm/Decline buttons of a block review stop working after this many hours
+  BLOCK_REVIEW_TTL_HOURS: z.coerce.number().positive().default(72),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

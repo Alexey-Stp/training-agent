@@ -1,5 +1,6 @@
 import type { Intensity, Sport } from '@triathlon/core';
 import type { PlannedSessionStatus } from '../context/types';
+import type { BlockReview } from '../block/schema';
 import type { WeeklyReview } from '../weekly/schema';
 import type { CoachAction, CoachSuggestion, SessionDiff } from './schema';
 
@@ -22,9 +23,10 @@ export type CoachDecisionSource = 'llm' | 'repaired' | 'fallback';
 
 /**
  * `daily`: the daily coaching run; `chat`: a suggestion from free-form coach chat; `weekly`: the
- * Sunday weekly review, whose changes target next week
+ * Sunday weekly review, whose changes target next week; `block`: a block review, whose `adjust`
+ * is a season re-projection (no session changes)
  */
-export type CoachDecisionOrigin = 'daily' | 'chat' | 'weekly';
+export type CoachDecisionOrigin = 'daily' | 'chat' | 'weekly' | 'block';
 
 /** A stored decision's action: the LLM's actions plus `adjust`, a weekly change that adds minutes */
 export type CoachDecisionAction = CoachAction | 'adjust';
@@ -50,8 +52,8 @@ export interface CoachDecisionRecord {
   attempts: number;
   /** Raw LLM replies, one per call that returned */
   rawResponses: string[];
-  /** The parsed suggestion (a weekly review for `weekly`), before guardrails */
-  suggestion: CoachSuggestion | WeeklyReview | null;
+  /** The parsed suggestion (a weekly or block review for those origins), before guardrails */
+  suggestion: CoachSuggestion | WeeklyReview | BlockReview | null;
   /** null when no suggestion reached the guardrails */
   verdict: GuardrailVerdict | null;
   reasons: string[];

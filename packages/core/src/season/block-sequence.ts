@@ -132,7 +132,7 @@ function focusFor(type: TrainingBlockType, ctx: FocusContext): string {
   }
 }
 
-interface Phase {
+export interface Phase {
   type: TrainingBlockType;
   weeks: number;
 }
@@ -148,7 +148,8 @@ function basePhases(base: number, config: BlockGeneratorConfig): Phase[] {
   return base > 0 ? [{ type: TrainingBlockType.base, weeks: base }] : [];
 }
 
-function phases(base: number, l: BlockLengths, config: BlockGeneratorConfig): Phase[] {
+/** Season phases in order: base (split when long), builds, peak, taper, race. */
+export function blockPhases(base: number, l: BlockLengths, config: BlockGeneratorConfig): Phase[] {
   return [
     ...basePhases(base, config),
     ...l.builds.map((weeks) => ({ type: TrainingBlockType.build, weeks })),
@@ -166,10 +167,23 @@ export function layoutBlocks(
   ctx: FocusContext,
   config: BlockGeneratorConfig
 ): TrainingBlock[] {
+  return layoutPhases(blockPhases(base, lengths, config), planStart, ctx);
+}
+
+/**
+ * Lays `phases` out contiguously from `planStart` with zero targets; the first block gets
+ * `firstOrder` (a re-projection continues after the frozen blocks).
+ */
+export function layoutPhases(
+  phases: Phase[],
+  planStart: string,
+  ctx: FocusContext,
+  firstOrder = 1
+): TrainingBlock[] {
   let start = parseISO(planStart);
-  return phases(base, lengths, config).map(({ type, weeks }, i) => {
+  return phases.map(({ type, weeks }, i) => {
     const block: TrainingBlock = {
-      order: i + 1,
+      order: firstOrder + i,
       type,
       startDate: format(start, 'yyyy-MM-dd'),
       weeks,

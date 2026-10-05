@@ -120,6 +120,7 @@ See [CI_CD.md](CI_CD.md) for complete CI/CD documentation.
 - `/week show` - Show this week of your active season plan: the block's targets, the sessions that hit them, and any rules-engine adjustments
 - `/race add <yyyy-MM-dd> <type> <A|B|C> <name>` - Add a race (type: `sprint|olympic|half|full|run|other`), e.g. `/race add 2027-06-12 olympic A Prague Triathlon`
 - `/race list` - Show your upcoming races
+- `/race move <yyyy-MM-dd> <yyyy-MM-dd>` - Change a race's date, e.g. `/race move 2027-06-12 2027-06-26`. Moving the A-race of your active season offers a re-projection of the season (see [Block review](#block-review))
 - `/season new` - Season wizard: pick weekly hours and your weak sport (inline buttons), review the block table, then save. Replacing an active season needs its own **Replace** button
 - `/season show` - Show the active season's block table and where today is
 - `/log <sport> <minutes> [intensity]` - Log completed workout
@@ -365,6 +366,35 @@ Next week
 
 Set `WEEKLY_REVIEW_ENABLED=false` to turn it off.
 
+### Block review
+
+On the last day of each training block (always a Sunday) at `BLOCK_REVIEW_TIME` (19:30) in the athlete's timezone, the coach reviews the block against its targets and, when needed, proposes a re-projection of the rest of the season:
+
+```
+🧱 Block 2 (build) review · 14.09 → 04.10
+📦 Volume 70% of target (7.0/10.0 h/wk)
+📈 CTL 50.0 → 53.0 (+3.0)
+📊 Compliance declining: 80% · 70% · 60%
+
+You managed 70% of the build volume (7.0 of 10.0 h/week).
+✅ CTL up 3.0
+⚠️ Compliance fell to 60% in the last week
+
+Re-projection · Next block: 10.8 → 8.2 h/wk · remaining 49.8 → 40.4 h
+Before:  3 peak 05.10-25.10 3 10.8 … / 4 taper … / 5 race …
+After:   3 peak 05.10-25.10 3  8.2 … / 4 taper … / 5 race …
+[✅ Confirm re-projection] [✖ Decline]
+```
+
+- **Verdict.** Volume achieved against the block's weekly target, from the stored weekly stats of the block's weeks; CTL from before the block to its end (and against `targetCtl` when a block has one); weekly compliance and its trend.
+- **Re-projection.** The remaining blocks are regenerated with the season generator's rules (≤8% ramp between load weeks, every 4th season week a recovery week, taper and race week), but the volume restarts from what you actually achieved: a block at 70% starts the next one at 70% of its planned level. Everything up to the review day stays as it was.
+- **Keep or re-project.** The coach recommends one. Volume more than `BLOCK_REVIEW_REPROJECT_THRESHOLD_PCT` (15%) off target always proposes the re-projection. Without the LLM, that threshold decides alone.
+- **Nothing changes without Confirm.** Confirm replaces the future blocks and republishes the next days to intervals.icu; Decline keeps the season and records the answer. If the season changed in between, nothing is applied. The buttons expire after `BLOCK_REVIEW_TTL_HOURS` (72 h).
+- **Race moved.** `/race move` on the active season's A-race runs the same review right away: the current week is kept, the rest is re-allocated for the new date (phases you are already past are not repeated), and you confirm or decline the old-vs-new table.
+- **One per block** (`BlockReviewRun`). Taper and race blocks are not reviewed.
+
+Set `BLOCK_REVIEW_ENABLED=false` to turn it off.
+
 ## intervals.icu Integration
 
 `packages/integrations-icu` (`@triathlon/integrations-icu`) is a typed REST client for [intervals.icu](https://intervals.icu). The worker uses it to validate credentials in `/connect icu` and to sync activities and wellness.
@@ -598,6 +628,7 @@ Available commands:
 /race add <yyyy-MM-dd> <type> <A|B|C> <name> - Add a race
   Example: /race add 2027-06-12 olympic A Prague Triathlon
 /race list - Show your upcoming races
+/race move <yyyy-MM-dd> <yyyy-MM-dd> - Change a race's date
 /season new - Build a season plan towards your next A race
 /season show - Show your active season's blocks
 /log <sport> <minutes> [intensity] - Log a workout

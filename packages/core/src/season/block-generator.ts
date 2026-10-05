@@ -5,13 +5,12 @@ import {
   BlockGeneratorConfig,
   DEFAULT_BLOCK_GENERATOR_CONFIG,
   SeasonGenerationError,
-  SportSplit,
-  round1,
 } from './generator-config';
-import { sportShares, weakSportBiasWarning } from './sport-split';
-import { Race, TrainingBlock, TrainingBlockType } from './types';
+import { SeasonWeek, sizeWeeks, weekSlots, withTargets } from './season-weeks';
+import { weakSportBiasWarning } from './sport-split';
+import { Race, TrainingBlock } from './types';
 import { isIsoDate } from './validate';
-import { buildWeeklyVolumes, startingLoad, WeekKind } from './volume';
+import { buildWeeklyVolumes, startingLoad } from './volume';
 
 export interface GenerateSeasonInput {
   aRace: Race;
@@ -23,18 +22,7 @@ export interface GenerateSeasonInput {
   startDate: string;
 }
 
-export interface SeasonWeek {
-  /** 1-based plan week */
-  index: number;
-  weekStart: string; // YYYY-MM-DD, a Monday
-  blockOrder: number;
-  blockType: TrainingBlockType;
-  kind: WeekKind;
-  hours: number;
-  swimH: number;
-  bikeH: number;
-  runH: number;
-}
+export type { SeasonWeek } from './season-weeks';
 
 export interface GeneratedSeason {
   startDate: string;
@@ -76,42 +64,6 @@ function resolveRunway(
   return { planStart, totalWeeks };
 }
 
-function weeksOf(
-  blocks: TrainingBlock[]
-): Pick<SeasonWeek, 'weekStart' | 'blockOrder' | 'blockType'>[] {
-  return blocks.flatMap((b) =>
-    Array.from({ length: b.weeks }, (_, k) => ({
-      weekStart: format(addDays(parseISO(b.startDate), k * 7), 'yyyy-MM-dd'),
-      blockOrder: b.order,
-      blockType: b.type,
-    }))
-  );
-}
-
-function round2(x: number): number {
-  return Math.round(x * 100) / 100;
-}
-
-function mean(weeks: SeasonWeek[], pick: (w: SeasonWeek) => number): number {
-  return weeks.reduce((sum, w) => sum + pick(w), 0) / weeks.length;
-}
-
-/** Block targets are the mean of its weeks, converted to metres / km with the configured paces. */
-function withTargets(
-  block: TrainingBlock,
-  weeks: SeasonWeek[],
-  config: BlockGeneratorConfig
-): TrainingBlock {
-  const own = weeks.filter((w) => w.blockOrder === block.order);
-  return {
-    ...block,
-    targetWeeklyHours: round1(mean(own, (w) => w.hours)),
-    targetSwimM: Math.round((mean(own, (w) => w.swimH) * config.swimMPerHour) / 100) * 100,
-    targetBikeH: round1(mean(own, (w) => w.bikeH)),
-    targetRunKm: round1(mean(own, (w) => w.runH) * config.runKmPerHour),
-  };
-}
-
 /**
  * Builds the season's block sequence backwards from the A-race: race week, taper, peak, two
  * build blocks, and base (split base1/base2) for the remaining weeks. Short runways compress
@@ -138,27 +90,19 @@ export function generateSeasonPlan(
   );
 
   const { start, warning: startWarning } = startingLoad(available, input.currentWeeklyLoad, config);
-  const slots = weeksOf(skeleton);
+  const slots = weekSlots(skeleton);
   const volumes = buildWeeklyVolumes(
     slots.map((s) => s.blockType),
     available,
     start,
     config
   );
-  const weeks = slots.map((slot, i): SeasonWeek => {
-    const { kind, hours } = volumes[i];
-    const inBase = slot.blockType === TrainingBlockType.base;
-    const shares: SportSplit = sportShares(raceType, input.weakSport, inBase, config);
-    return {
-      index: i + 1,
-      ...slot,
-      kind,
-      hours,
-      swimH: round2(hours * shares.swim),
-      bikeH: round2(hours * shares.bike),
-      runH: round2(hours * shares.run),
-    };
-  });
+  const weeks = sizeWeeks(
+    slots,
+    volumes,
+    { raceType, weakSport: input.weakSport, firstIndex: 1 },
+    config
+  );
 
   const warnings = [
     ...allocation.warnings,

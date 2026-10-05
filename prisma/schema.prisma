@@ -26,6 +26,7 @@ model User {
   eveningCloseoutRuns EveningCloseoutRun[]
   weeklyStats       WeeklyStats[]
   weeklyReviewRuns  WeeklyReviewRun[]
+  blockReviewRuns   BlockReviewRun[]
 
   @@index([telegramId])
 }
@@ -258,8 +259,11 @@ model SeasonPlan {
   aRace     Race?            @relation("ARace", fields: [aRaceId], references: [id], onDelete: SetNull)
   status    SeasonPlanStatus @default(draft)
   blocks    TrainingBlock[]
+  weeklyHoursAvailable Float? // the wizard's answer; a re-projection ramps up to it
+  weakSport            Sport? // the wizard's answer; NULL is no weak sport
+  blockReviewRuns      BlockReviewRun[]
   createdAt DateTime         @default(now())
-  updatedAt DateTime         @updatedAt
+  updatedAt DateTime         @updatedAt // a block-review proposal applies only to this version
 
   @@index([userId, status])
 }
@@ -338,6 +342,7 @@ enum CoachDecisionOrigin {
   daily
   chat
   weekly
+  block
 }
 
 enum CoachUserAction {
@@ -347,7 +352,8 @@ enum CoachUserAction {
 }
 
 // One row per daily coaching run, whatever its outcome (packages/ai suggestion/run.ts), one per
-// coach-chat suggestion (packages/ai chat/run.ts) and one per weekly review (packages/ai weekly/run.ts)
+// coach-chat suggestion (packages/ai chat/run.ts), one per weekly review (packages/ai weekly/run.ts)
+// and one per block review (packages/ai block/run.ts)
 model CoachDecision {
   id                      String              @id @default(cuid())
   userId                  String
@@ -498,5 +504,47 @@ model WeeklyReviewRun {
   updatedAt       DateTime           @updatedAt
 
   @@unique([userId, isoWeek])
+  @@index([coachDecisionId])
+}
+
+enum BlockReviewTrigger {
+  block_end
+  race_move
+}
+
+enum BlockReviewStatus {
+  pending
+  running
+  sent
+  failed
+}
+
+// One block review per season and block end or A-race move (apps/worker reviews/block-review.ts);
+// holds the proposed re-projection until the athlete confirms or declines it
+model BlockReviewRun {
+  id              String             @id @default(cuid())
+  userId          String
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  seasonPlanId    String
+  seasonPlan      SeasonPlan         @relation(fields: [seasonPlanId], references: [id], onDelete: Cascade)
+  key             String // block:<order> or race:<raceId>:<newDate>
+  trigger         BlockReviewTrigger
+  status          BlockReviewStatus  @default(pending)
+  startedAt       DateTime? // lease of the run in progress
+  coachDecisionId String?
+  verdict         Json? // core BlockVerdict
+  proposedBlocks  Json? // TrainingBlock[] of the whole re-projected season; NULL when kept
+  freezeThrough   String? // YYYY-MM-DD; blocks up to this day stay as they are
+  seasonUpdatedAt DateTime? // SeasonPlan.updatedAt the proposal was computed from
+  reportText      String? // rendered report (Telegram HTML); a retry resends it
+  reportKeyboard  Json? // InlineButton[][] sent with the report
+  stale           Boolean            @default(false) // the activity sync failed
+  stageTimings    Json               @default("{}") // stage → ms
+  error           String?
+  sentAt          DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@unique([userId, seasonPlanId, key])
   @@index([coachDecisionId])
 }

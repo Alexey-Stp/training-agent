@@ -3,9 +3,12 @@ import type { Profile } from '@prisma/client';
 import { RacePriority, RaceType, type Race } from '@triathlon/core';
 import {
   handleRace,
+  MSG_RACE_MOVE_USAGE,
   MSG_RACE_USAGE,
+  MSG_REPROJECTION_COMING,
   parseRaceAddArgs,
   type RaceCommandDeps,
+  type RaceMove,
   type RaceRecord,
 } from '../src/race-command';
 
@@ -64,10 +67,14 @@ describe('parseRaceAddArgs', () => {
 
 describe('handleRace', () => {
   let stored: RaceRecord[];
+  let aRaceId: string | null;
+  let queued: RaceMove[];
   let deps: RaceCommandDeps;
 
   beforeEach(() => {
     stored = [];
+    aRaceId = null;
+    queued = [];
     deps = {
       repo: {
         create: (_userId, race: Race) => {
@@ -77,6 +84,17 @@ describe('handleRace', () => {
         },
         listUpcoming: (_userId, fromDate) =>
           Promise.resolve(stored.filter((r) => r.date >= fromDate)),
+        findByDate: (_userId, date) => Promise.resolve(stored.filter((r) => r.date === date)),
+        moveDate: (_userId, raceId, date) => {
+          const race = stored.find((r) => r.id === raceId);
+          if (race) race.date = date;
+          return Promise.resolve(race !== undefined);
+        },
+      },
+      activeARaceId: () => Promise.resolve(aRaceId),
+      queueBlockReview: (_userId, move) => {
+        queued.push(move);
+        return Promise.resolve();
       },
       now: () => new Date('2026-10-07T10:00:00Z'),
     };
@@ -111,5 +129,50 @@ describe('handleRace', () => {
   it('shows usage for anything else', async () => {
     expect(await handleRace(USER, [], deps)).toBe(MSG_RACE_USAGE);
     expect(await handleRace(USER, ['remove'], deps)).toBe(MSG_RACE_USAGE);
+  });
+
+  describe('/race move', () => {
+    beforeEach(async () => {
+      await handleRace(USER, ['add', '2027-06-12', 'half', 'A', 'Prague'], deps);
+    });
+
+    it('moves the A-race and queues a block review to re-project the season', async () => {
+      aRaceId = 'r1';
+
+      const reply = await handleRace(USER, ['move', '2027-06-12', '2027-06-26'], deps);
+
+      const moved = '✅ Race moved: Sat Jun 26, 2027 · A · half · Prague';
+      expect(reply).toBe([moved, '', MSG_REPROJECTION_COMING].join('\n'));
+      expect(stored[0].date).toBe('2027-06-26');
+      expect(queued).toEqual([{ raceId: 'r1', previousDate: '2027-06-12', newDate: '2027-06-26' }]);
+    });
+
+    it('only moves a race that is not the active season A-race', async () => {
+      const reply = await handleRace(USER, ['move', '2027-06-12', '2027-06-26'], deps);
+
+      expect(reply).toBe('✅ Race moved: Sat Jun 26, 2027 · A · half · Prague');
+      expect(queued).toEqual([]);
+    });
+
+    it.each([
+      [[], MSG_RACE_MOVE_USAGE],
+      [['2027-06-12'], MSG_RACE_MOVE_USAGE],
+      [['2027-06-12', '2027-02-30'], '❌ 2027-02-30 is not a yyyy-MM-dd date.'],
+      [['2027-06-12', '2026-10-07'], '❌ The new race date must be after today.'],
+      [['2027-06-12', '2027-06-12'], '❌ The race is already on 2027-06-12.'],
+      [['2027-06-13', '2027-06-26'], '❌ No race on 2027-06-13. See /race list.'],
+    ])('rejects %j', async (args, error) => {
+      aRaceId = 'r1';
+      expect(await handleRace(USER, ['move', ...args], deps)).toBe(error);
+      expect(stored[0].date).toBe('2027-06-12');
+      expect(queued).toEqual([]);
+    });
+
+    it('refuses to guess between two races on the same day', async () => {
+      await handleRace(USER, ['add', '2027-06-12', 'sprint', 'C', 'Brno'], deps);
+      expect(await handleRace(USER, ['move', '2027-06-12', '2027-06-26'], deps)).toMatch(
+        /More than one race/
+      );
+    });
   });
 });

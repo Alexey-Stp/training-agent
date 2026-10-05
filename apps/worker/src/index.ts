@@ -3,6 +3,8 @@ import { Worker, Job, Queue } from 'bullmq';
 import { Bot } from 'grammy';
 import Redis from 'ioredis';
 import {
+  BLOCK_CONFIRM_COMMAND,
+  BLOCK_DECLINE_COMMAND,
   CHECKIN_ANSWER_COMMAND,
   COACH_APPLY_COMMAND,
   COACH_CHAT_COMMAND,
@@ -14,7 +16,7 @@ import {
   SEASON_CONFIRM_COMMAND,
   SEASON_PREVIEW_COMMAND,
 } from '@triathlon/core';
-import type { CoachAnswer, CommandJob, IcuSyncJob } from '@triathlon/core';
+import type { BlockReviewAnswer, CoachAnswer, CommandJob, IcuSyncJob } from '@triathlon/core';
 import { IcuClient } from '@triathlon/integrations-icu';
 import {
   createLlmProvider,
@@ -49,6 +51,8 @@ import {
   checkInRepo,
   weeklyStatsRepo,
   weeklyReviewRunRepo,
+  blockReviewRunRepo,
+  seasonReprojectRepo,
 } from './db';
 import {
   handleStart,
@@ -87,6 +91,7 @@ import { processPlanReconcileJob, type PlanReconcileDeps } from './plan-reconcil
 import { RedisChatLimiter } from './chat-limit';
 import { handleCoachChat, type CoachChatDeps } from './coach-chat-command';
 import { handleCoachAnswer, type CoachAnswerDeps } from './coach-apply';
+import { handleBlockReviewAnswer, type BlockReviewAnswerDeps } from './block-review-apply';
 import { handlePlanToday } from './plan-today';
 import {
   ACTIVITY_SYNC_JOB,
@@ -109,6 +114,11 @@ import {
   createEveningCloseoutScheduler,
   createWeeklyStatsScheduler,
   createWeeklyReviewScheduler,
+  BLOCK_REVIEW_QUEUE,
+  BLOCK_REVIEW_RACE_MOVE_JOB,
+  blockReviewRaceMoveJobId,
+  createBlockReviewScheduler,
+  reconcileBlockReviewSchedulers,
   reconcileDailyBriefSchedulers,
   reconcileEveningCloseoutSchedulers,
   reconcileWeeklyStatsSchedulers,
@@ -124,6 +134,11 @@ import { runEveningCloseout, type EveningCloseoutDeps } from './daily-loop/close
 import { handleCheckInAnswer, type CheckInAnswerDeps } from './daily-loop/checkin-answer';
 import { runWeeklyStats, type WeeklyStatsDeps } from './reviews/weekly-stats';
 import { runWeeklyReviewJob, type WeeklyReviewDeps } from './reviews/weekly-review';
+import {
+  runBlockReviewJob,
+  type BlockReviewDeps,
+  type BlockReviewJob,
+} from './reviews/block-review';
 
 const config = getConfig();
 
@@ -190,6 +205,16 @@ const weeklyReviewScheduler = createWeeklyReviewScheduler(
   weeklyReviewQueue,
   weeklyReviewSchedulerDeps
 );
+// Block review: per linked athlete, one cron scheduler on Sundays at the local BLOCK_REVIEW_TIME;
+// the job reviews only on the last day of a block. `/race move` adds one-off jobs.
+const blockReviewSchedulerDeps: DailyBriefSchedulerDeps = {
+  profiles: briefProfileRepo,
+  defaultTime: config.BLOCK_REVIEW_TIME,
+};
+const blockReviewQueue = new Queue<BlockReviewJob>(BLOCK_REVIEW_QUEUE, {
+  connection: redisConnection,
+});
+const blockReviewScheduler = createBlockReviewScheduler(blockReviewQueue, blockReviewSchedulerDeps);
 const weeklyGuardrailConfig: WeeklyGuardrailConfig = {
   ...DEFAULT_WEEKLY_GUARDRAIL_CONFIG,
   maxRamp: config.WEEKLY_REVIEW_MAX_RAMP_PCT / 100,
@@ -245,7 +270,28 @@ const seasonPublishDeps: SeasonPublishDeps = {
   now: () => new Date(),
 };
 
-const raceCommandDeps: RaceCommandDeps = { repo: raceRepo, now: () => new Date() };
+const raceCommandDeps: RaceCommandDeps = {
+  repo: raceRepo,
+  // With block reviews off, a moved A-race is just a moved race
+  activeARaceId: async (userId) =>
+    config.BLOCK_REVIEW_ENABLED
+      ? ((await seasonReprojectRepo.findActiveRecord(userId))?.season.aRace?.id ?? null)
+      : null,
+  queueBlockReview: async (userId, move) => {
+    await blockReviewQueue.add(
+      BLOCK_REVIEW_RACE_MOVE_JOB,
+      { userId, trigger: 'race_move', ...move },
+      {
+        jobId: blockReviewRaceMoveJobId(userId, move.raceId, move.newDate),
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 120_000 },
+        removeOnComplete: { age: 86400, count: 100 },
+        removeOnFail: { age: 7 * 86400 },
+      }
+    );
+  },
+  now: () => new Date(),
+};
 
 const seasonCommandDeps: SeasonCommandDeps = {
   seasons: seasonRepo,
@@ -269,6 +315,28 @@ const seasonCommandDeps: SeasonCommandDeps = {
   onPublishError: (error, userId) => {
     logger.error({ error, userId }, 'Failed to queue season publish');
   },
+  now: () => new Date(),
+};
+
+const blockReviewAnswerDeps: BlockReviewAnswerDeps = {
+  runs: blockReviewRunRepo,
+  decisions: coachAnswerRepo,
+  seasons: seasonReprojectRepo,
+  // Republish the rolling window right away; the publisher writes T+1 onward only
+  publish: async (userId, runId) => {
+    await syncQueue.add(
+      SEASON_PUBLISH_JOB,
+      { userId },
+      {
+        jobId: `season-publish-block-${userId}-${runId}`,
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 5000 },
+        removeOnComplete: { age: 3600, count: 100 },
+        removeOnFail: { age: 86400 },
+      }
+    );
+  },
+  ttlHours: config.BLOCK_REVIEW_TTL_HOURS,
   now: () => new Date(),
 };
 
@@ -320,7 +388,8 @@ const icuConnectDeps: IcuConnectDeps = {
     ...(config.DAILY_BRIEF_ENABLED ? [dailyBriefScheduler] : []),
     ...(config.EVENING_CLOSEOUT_ENABLED ? [closeoutScheduler] : []),
     ...(config.WEEKLY_STATS_ENABLED ? [weeklyStatsScheduler] : []),
-    ...(config.WEEKLY_REVIEW_ENABLED ? [weeklyReviewScheduler] : [])
+    ...(config.WEEKLY_REVIEW_ENABLED ? [weeklyReviewScheduler] : []),
+    ...(config.BLOCK_REVIEW_ENABLED ? [blockReviewScheduler] : [])
   ),
   onSchedulerError: (error, userId) => {
     logger.error({ error, userId }, 'Failed to update intervals.icu sync schedule');
@@ -344,6 +413,14 @@ function coachAnswer(
   telegramMessageId: number
 ): Promise<Reply> {
   return handleCoachAnswer(user, { decisionId, answer, telegramMessageId }, coachAnswerDeps);
+}
+
+function blockAnswer(
+  user: WorkerUser,
+  runId: string | undefined,
+  answer: BlockReviewAnswer
+): Promise<Reply> {
+  return handleBlockReviewAnswer(user, { runId, answer }, blockReviewAnswerDeps);
 }
 
 /**
@@ -523,6 +600,15 @@ const worker = new Worker<CommandJob>(
 
         case COACH_DISCUSS_COMMAND:
           response = await coachAnswer(user, args[0], 'discuss', messageId);
+          break;
+
+        // Confirm / Decline under a block review's re-projection
+        case BLOCK_CONFIRM_COMMAND:
+          response = await blockAnswer(user, args[0], 'confirm');
+          break;
+
+        case BLOCK_DECLINE_COMMAND:
+          response = await blockAnswer(user, args[0], 'decline');
           break;
 
         case 'unknown':
@@ -762,6 +848,40 @@ weeklyReviewWorker?.on('error', (err) => {
   logger.error({ error: err }, 'Weekly review worker error');
 });
 
+const blockReviewDeps: BlockReviewDeps = {
+  runs: blockReviewRunRepo,
+  profiles: briefProfileRepo,
+  stats: weeklyStatsRepo,
+  seasons: seasonReprojectRepo,
+  syncActivities: (userId) => syncActivities(userId, activitySyncDeps),
+  loadTrainingHours,
+  provider: llmProvider,
+  decisions: coachDecisionRepo,
+  config: { thresholdPct: config.BLOCK_REVIEW_REPROJECT_THRESHOLD_PCT },
+  sendMessage: (chatId, text, options) => api.sendMessage(chatId, text, options),
+  logger,
+  now: () => new Date(),
+};
+
+const blockReviewWorker = config.BLOCK_REVIEW_ENABLED
+  ? new Worker<BlockReviewJob>(
+      BLOCK_REVIEW_QUEUE,
+      (job: Job<BlockReviewJob>) => runBlockReviewJob(job.data, blockReviewDeps),
+      { connection: redisConnection, concurrency: 2 }
+    )
+  : null;
+
+blockReviewWorker?.on('failed', (job, err) => {
+  logger.error(
+    { jobId: job?.id, userId: job?.data.userId, attempt: job?.attemptsMade, error: err },
+    'Block review failed'
+  );
+});
+
+blockReviewWorker?.on('error', (err) => {
+  logger.error({ error: err }, 'Block review worker error');
+});
+
 async function startIcuSync() {
   const userIds = await activityRepo.listConnectedUserIds();
   const result = await reconcileSchedulers(syncQueue, icuSyncScheduler, userIds, syncJobs);
@@ -796,6 +916,13 @@ async function startIcuSync() {
     weeklyReviewSchedulerDeps
   );
   logger.info(review, 'Weekly review schedules reconciled');
+  const block = await reconcileBlockReviewSchedulers(
+    blockReviewQueue,
+    blockReviewScheduler,
+    config.BLOCK_REVIEW_ENABLED ? userIds : [],
+    blockReviewSchedulerDeps
+  );
+  logger.info(block, 'Block review schedules reconciled');
 }
 
 startIcuSync().catch((error: unknown) => {
@@ -814,6 +941,7 @@ async function shutdown() {
     closeoutWorker?.close(),
     weeklyStatsWorker?.close(),
     weeklyReviewWorker?.close(),
+    blockReviewWorker?.close(),
   ]);
   await Promise.all([
     syncQueue.close(),
@@ -821,6 +949,7 @@ async function shutdown() {
     closeoutQueue.close(),
     weeklyStatsQueue.close(),
     weeklyReviewQueue.close(),
+    blockReviewQueue.close(),
   ]);
   redis.disconnect();
   await prisma.$disconnect();
