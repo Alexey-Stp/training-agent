@@ -1,9 +1,15 @@
 import { format, parseISO } from 'date-fns';
 import { formatInTimeZone } from 'date-fns-tz';
 import { coachDecisionData, escapeHtml } from '@triathlon/core';
-import type { CoachDecisionRecord, PlannedSessionSummary } from '@triathlon/ai';
-import type { RichReply } from '../reply';
+import {
+  describeSessionChanges,
+  type CoachDecisionRecord,
+  type PlannedSessionSummary,
+} from '@triathlon/ai';
+import { toCoachPlanSession } from '../coach-plan';
+import type { InlineButton, RichReply } from '../reply';
 import { getSportIcon } from '../session-format';
+import type { ReadinessVerdict } from './readiness';
 
 export interface BriefInput {
   /** Athlete-local today */
@@ -11,8 +17,9 @@ export interface BriefInput {
   timezone: string;
   decision: CoachDecisionRecord;
   decisionId: string;
-  /** Today's planned sessions */
-  todaySessions: readonly PlannedSessionSummary[];
+  /** The plan window the coach saw (today..+6): names the sessions the changes touch */
+  planned: readonly PlannedSessionSummary[];
+  readiness: ReadinessVerdict;
   /** An ICU sync failed: the brief uses data as of `dataAsOf` (null: never synced) */
   stale: boolean;
   dataAsOf: Date | null;
@@ -29,33 +36,54 @@ function sessionLine(s: PlannedSessionSummary): string {
   return getSportIcon(s.sport) + ' ' + escapeHtml(s.title) + ' (' + detail + ')';
 }
 
+/** Apply / Keep plan when the coach proposes changes; Discuss always. */
+export function briefKeyboard(decisionId: string, hasChanges: boolean): InlineButton[][] {
+  const discuss = [{ text: '💬 Discuss', data: coachDecisionData('discuss', decisionId) }];
+  if (!hasChanges) return [discuss];
+  return [
+    [
+      { text: '✅ Apply', data: coachDecisionData('apply', decisionId) },
+      { text: '➡️ Keep plan', data: coachDecisionData('keep', decisionId) },
+    ],
+    discuss,
+  ];
+}
+
+function proposedLines(input: BriefInput): string[] {
+  const { finalChanges } = input.decision;
+  if (finalChanges.length === 0) return [];
+  const sessions = input.planned.map(toCoachPlanSession);
+  const lines = describeSessionChanges(finalChanges, sessions).map((l) => '• ' + escapeHtml(l));
+  return ['', '<b>Proposed</b>', ...lines];
+}
+
 /**
- * The morning brief: date, stale-data note, today's sessions and the coach's message, with
- * Apply/Keep buttons when the coach proposes plan changes.
+ * The morning brief: date, stale-data note, readiness verdict, today's sessions, the coach's
+ * recommendation and the exact changes it proposes, with Apply / Keep plan / Discuss buttons.
  */
 export function renderBrief(input: BriefInput): RichReply {
   const heading = '☀️ <b>Morning brief: ' + format(parseISO(input.date), 'EEE d MMM') + '</b>';
+  const todaySessions = input.planned.filter((s) => s.date === input.date);
   const today =
-    input.todaySessions.length === 0
+    todaySessions.length === 0
       ? ['Rest day: nothing planned today.']
-      : ['<b>Today</b>', ...input.todaySessions.map(sessionLine)];
+      : ['<b>Today</b>', ...todaySessions.map(sessionLine)];
+  const readiness = input.readiness.emoji + ' ' + escapeHtml(input.readiness.sentence);
   const lines = [
     heading,
     ...(input.stale ? ['', escapeHtml(staleNote(input.dataAsOf, input.timezone))] : []),
     '',
+    readiness,
+    '',
     ...today,
     '',
+    '<b>Coach</b>',
     escapeHtml(input.decision.athleteMessage),
+    ...proposedLines(input),
   ];
-
-  const reply: RichReply = { text: lines.join('\n'), html: true };
-  if (input.decision.finalChanges.length > 0) {
-    reply.keyboard = [
-      [
-        { text: '✅ Apply', data: coachDecisionData('apply', input.decisionId) },
-        { text: '↩️ Keep my plan', data: coachDecisionData('keep', input.decisionId) },
-      ],
-    ];
-  }
-  return reply;
+  return {
+    text: lines.join('\n'),
+    html: true,
+    keyboard: briefKeyboard(input.decisionId, input.decision.finalChanges.length > 0),
+  };
 }

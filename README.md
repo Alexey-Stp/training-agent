@@ -262,7 +262,32 @@ Any message that isn't a `/command` goes to the coach. The worker answers it wit
 
 ### Morning brief
 
-Every linked athlete gets one brief a day at `Profile.briefTime` in their own timezone (default `DAILY_BRIEF_DEFAULT_TIME`, 06:30). The worker syncs wellness and activities from intervals.icu, builds the daily context, asks the coach for a suggestion (guardrails as above) and sends the brief: today's sessions and the coach's message, with **✅ Apply** / **↩️ Keep my plan** buttons when the coach proposes a change.
+Every linked athlete gets one brief a day at `Profile.briefTime` in their own timezone (default `DAILY_BRIEF_DEFAULT_TIME`, 06:30). The worker syncs wellness and activities from intervals.icu, builds the daily context, asks the coach for a suggestion (guardrails as above) and sends the brief:
+
+```
+☀️ Morning brief: Mon 5 Oct
+
+🟡 HRV is below your 30-day baseline: listen to your body today.
+
+Today
+🚴 VO2 5x4 (70min • Z5)
+
+Coach
+HRV is low and sleep was short. Take the VO2 set down a notch.
+
+Proposed
+• Bike VO2 5x4 70′→50′, Z5→Z3
+
+[✅ Apply] [➡️ Keep plan]
+[💬 Discuss]
+```
+
+- **Readiness line.** Worst signal wins: check-in readiness ≤ 2/5 (or low HRV plus TSB below −20) is 🔴, low HRV vs the 30-day baseline, TSB below −20 or a 3/5 check-in is 🟡, otherwise 🟢; ⚪ when there is no data.
+- **✅ Apply** writes the changes in one transaction and pushes only those sessions to intervals.icu. The brief is then edited to list the exact changes. If the push fails, the changes are undone (sessions already sent to intervals.icu are marked for the next `/plan push`), the decision stays open and the brief says so.
+- **➡️ Keep plan** records the answer (`CoachDecision.userAction = keep`) and changes nothing.
+- **💬 Discuss** puts the suggestion into the coach chat history and asks what to change; the reply carries Apply / Keep plan again. Just answer in the chat.
+- **Expiry.** The buttons work for `COACH_DECISION_TTL_HOURS` (24). A later tap gets "This brief has expired" and a pointer to `/plan today`, which lists today's stored sessions.
+- Briefs without a proposed change only offer Discuss.
 
 - **One per day.** Each run is keyed on the athlete and local date (`DailyBriefRun`), so a second trigger the same day sends nothing. DST changes move the UTC time, not the local one.
 - **intervals.icu down.** The brief still goes out with `⚠️ intervals.icu unavailable: data as of <last sync>`.

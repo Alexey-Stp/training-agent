@@ -1,0 +1,43 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`renderBrief > renders a brief with a suggestion 1`] = `
+"☀️ <b>Morning brief: Mon 5 Oct</b>
+
+🟡 HRV is below your 30-day baseline: listen to your body.
+
+<b>Today</b>
+🚴 VO2 5x4 (70min • Z5)
+🏊 Aerobic swim (45min • Z2)
+
+<b>Coach</b>
+HRV is low &amp; sleep was short. Take the VO2 set down a notch.
+
+<b>Proposed</b>
+• Bike VO2 5x4 70′→50′, Z5→Z3"
+`;
+
+exports[`renderBrief > renders a brief without a suggestion 1`] = `
+"☀️ <b>Morning brief: Mon 5 Oct</b>
+
+🟢 Recovered: good to train as planned.
+
+<b>Today</b>
+🚴 VO2 5x4 (70min • Z5)
+🏊 Aerobic swim (45min • Z2)
+
+<b>Coach</b>
+You are fresh. Go and enjoy the VO2 set."
+`;
+
+exports[`renderBrief > renders a rest day with stale data 1`] = `
+"☀️ <b>Morning brief: Mon 5 Oct</b>
+
+⚠️ intervals.icu unavailable: data as of 2026-10-04 20:00
+
+⚪ No readiness data today: go by how you feel.
+
+Rest day: nothing planned today.
+
+<b>Coach</b>
+Rest well."
+`;

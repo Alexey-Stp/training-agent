@@ -121,3 +121,74 @@ export function buildCoachPatches(
   }
   return patches;
 }
+
+/** The rows `patches` change: the snapshot an Apply rolls back to. Tombstones are new rows. */
+export function patchedRows(
+  rows: readonly PlannedSessionRecord[],
+  patches: readonly CoachPatch[]
+): PlannedSessionRecord[] {
+  const ids = new Set(patches.flatMap((p) => (p.kind === 'tombstone' ? [] : [p.id])));
+  return rows.filter((r) => ids.has(r.id));
+}
+
+/**
+ * One write that undoes an applied coach decision:
+ * - `delete`: a row the apply created (a tombstone where a moved session was)
+ * - `restore`: a changed row back to its snapshot
+ * - `recreate`: a snapshot row that is gone
+ */
+export type RollbackPatch =
+  | { kind: 'delete'; id: string }
+  | { kind: 'restore'; row: PlannedSessionRecord }
+  | { kind: 'recreate'; row: PlannedSessionRecord };
+
+/** Statuses where the athlete's intervals.icu version wins: a rollback leaves them as they were */
+const KEEP_STATUSES: ReadonlySet<PlannedSessionRecord['status']> = new Set([
+  'modified_externally',
+  'completed',
+  'skipped',
+]);
+
+/**
+ * A changed row back to its snapshot. Whether the failed push already reached ICU for it is
+ * unknown (an ICU call may succeed and the DB write after it fail), so a row with an ICU
+ * event goes back to draft and the next push writes the snapshot content again. A cancelled
+ * row also forgets its event id: the push adopts the event by external_id, or recreates it
+ * when the delete got through.
+ */
+function restoreOf(snap: PlannedSessionRecord, current: PlannedSessionRecord): RollbackPatch {
+  const cancelled = current.deletedAt !== null;
+  const icuEventId = cancelled ? null : current.icuEventId;
+  const inIcu = icuEventId !== null || snap.icuEventId !== null;
+  const status = KEEP_STATUSES.has(snap.status) || !inIcu ? snap.status : 'draft';
+  return {
+    kind: 'restore',
+    row: { ...snap, icuEventId, pushedHash: cancelled ? null : current.pushedHash, status },
+  };
+}
+
+/**
+ * The writes that undo the decision `decisionId` after its push failed: `snapshot` holds the
+ * changed rows as they were before the apply (`patchedRows`), `current` the rows now (a
+ * window covering the snapshot and the apply's new dates).
+ */
+export function buildRollbackPatches(
+  snapshot: readonly PlannedSessionRecord[],
+  current: readonly PlannedSessionRecord[],
+  decisionId: string
+): RollbackPatch[] {
+  const snapIds = new Set(snapshot.map((r) => r.id));
+  const byId = new Map(current.map((r) => [r.id, r]));
+  const deletes: RollbackPatch[] = current
+    .filter((r) => r.coachDecisionId === decisionId && !snapIds.has(r.id))
+    .map((r) => ({ kind: 'delete', id: r.id }));
+  const restores = snapshot.map((snap): RollbackPatch => {
+    const row = byId.get(snap.id);
+    if (row) return restoreOf(snap, row);
+    return {
+      kind: 'recreate',
+      row: { ...snap, status: 'draft', icuEventId: null, pushedHash: null },
+    };
+  });
+  return [...deletes, ...restores];
+}

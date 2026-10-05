@@ -10,6 +10,8 @@ export interface RichReply {
   /** Telegram HTML parse mode: escape dynamic text with core `escapeHtml` */
   html?: boolean;
   keyboard?: InlineButton[][];
+  /** Replace the message whose button was tapped (`CommandJob.messageId`) instead of sending */
+  editTapped?: boolean;
 }
 
 export type Reply = string | RichReply;

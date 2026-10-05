@@ -1,5 +1,6 @@
 import { format } from 'date-fns';
 import { Sport, type Session } from '@triathlon/core';
+import type { PlannedSessionRecord } from './plan-store';
 
 export function getSportIcon(sport: Sport): string {
   switch (sport) {
@@ -47,4 +48,21 @@ export function formatSession(session: Session, status: string | null = null): s
     text += `\n     ${status}`;
   }
   return text + '\n';
+}
+
+/** intervals.icu status line of a stored session, if there is anything to say. */
+export function syncStatusLabel(row: PlannedSessionRecord | undefined): string | null {
+  if (!row) return null;
+  switch (row.status) {
+    case 'pushed':
+      return '📲 In intervals.icu';
+    case 'draft':
+      return row.icuEventId !== null ? '✏️ Changed, not pushed yet (/plan push)' : null;
+    case 'modified_externally':
+      return `⚠️ Changed in intervals.icu (${row.externalChange ?? 'edited'}), your version kept`;
+    case 'completed':
+      return '✅ Completed';
+    case 'skipped':
+      return '⏭ Skipped';
+  }
 }

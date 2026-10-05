@@ -35,7 +35,7 @@ import type { ProfileRepo } from './season-publish';
 import { toUserProfile } from './profile';
 import type { CoachChatRepo } from './coach-chat-command';
 import type { CoachAnswerRepo } from './coach-apply';
-import type { CoachPatch } from './coach-plan';
+import type { CoachPatch, RollbackPatch } from './coach-plan';
 import type { InlineButton } from './reply';
 import type { DailyBriefRun, DailyBriefRunRepo, StageTimings } from './daily-loop/run-store';
 import type { BriefProfileRepo } from './daily-loop/scheduler';
@@ -675,22 +675,33 @@ export const coachAnswerRepo: CoachAnswerRepo = {
   async findDecision(userId, decisionId) {
     const row = await prisma.coachDecision.findFirst({
       where: { id: decisionId, userId },
-      select: { id: true, finalAction: true, finalChanges: true, accepted: true },
+      select: {
+        id: true,
+        origin: true,
+        finalAction: true,
+        finalChanges: true,
+        athleteMessage: true,
+        accepted: true,
+        createdAt: true,
+      },
     });
     return row
       ? {
           id: row.id,
+          origin: row.origin,
           finalAction: row.finalAction,
           finalChanges: row.finalChanges as unknown as SessionDiff[],
+          athleteMessage: row.athleteMessage,
           accepted: row.accepted,
+          createdAt: row.createdAt,
         }
       : null;
   },
 
-  async decline(userId, decisionId, now) {
+  async decline(userId, decisionId, userAction, now) {
     const { count } = await prisma.coachDecision.updateMany({
       where: { id: decisionId, userId, accepted: null },
-      data: { accepted: false, answeredAt: now },
+      data: { accepted: false, answeredAt: now, userAction },
     });
     return count > 0;
   },
@@ -702,7 +713,7 @@ export const coachAnswerRepo: CoachAnswerRepo = {
       // Conditional: a double tap or a concurrent Keep wins, nothing changes here
       const { count } = await tx.coachDecision.updateMany({
         where: { id: decisionId, userId, accepted: null },
-        data: { accepted: true, answeredAt: now },
+        data: { accepted: true, answeredAt: now, userAction: 'apply' },
       });
       if (count === 0) return false;
       // Rows first: a moved session frees its (date, slot) before its tombstone takes it
@@ -724,7 +735,58 @@ export const coachAnswerRepo: CoachAnswerRepo = {
       return true;
     });
   },
+
+  revertDecision(userId, decisionId, patches) {
+    return prisma.$transaction(async (tx) => {
+      // Deletes first: a moved session goes back to the (date, slot) its tombstone holds
+      const deletes = patches.flatMap((p) => (p.kind === 'delete' ? [p.id] : []));
+      if (deletes.length > 0) {
+        await tx.plannedSession.deleteMany({ where: { userId, id: { in: deletes } } });
+      }
+      await Promise.all(patches.map((p) => writeRollbackPatch(tx, userId, p)));
+      await tx.coachDecision.updateMany({
+        where: { id: decisionId, userId },
+        data: { accepted: null, answeredAt: null, userAction: null },
+      });
+    });
+  },
+
+  async markDiscussed(userId, decisionId) {
+    await prisma.coachDecision.updateMany({
+      where: { id: decisionId, userId, accepted: null },
+      data: { userAction: 'discuss' },
+    });
+  },
+
+  async findBriefText(userId, decisionId) {
+    const run = await prisma.dailyBriefRun.findFirst({
+      where: { userId, coachDecisionId: decisionId },
+      select: { briefText: true },
+    });
+    return run?.briefText ?? null;
+  },
 };
+
+/** A restore or recreate of a rolled-back row; deletes are done before. */
+function writeRollbackPatch(tx: Prisma.TransactionClient, userId: string, patch: RollbackPatch) {
+  if (patch.kind === 'delete') return Promise.resolve();
+  const { row } = patch;
+  const data = {
+    date: row.date,
+    slot: row.slot,
+    ...plannedSessionContent(row),
+    status: row.status,
+    icuEventId: row.icuEventId,
+    pushedHash: row.pushedHash,
+    externalChange: row.externalChange,
+    deletedAt: row.deletedAt,
+    coachDecisionId: row.coachDecisionId,
+  };
+  if (patch.kind === 'recreate') {
+    return tx.plannedSession.create({ data: { id: row.id, userId, ...data } });
+  }
+  return tx.plannedSession.update({ where: { id: row.id, userId }, data });
+}
 
 /** Hours of synced intervals.icu activities dated from..to (athlete-local, inclusive). */
 export async function loadTrainingHours(userId: string, from: string, to: string): Promise<number> {

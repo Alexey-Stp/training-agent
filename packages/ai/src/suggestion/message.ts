@@ -23,6 +23,45 @@ export function describeChange(diff: SessionDiff, sessions: readonly CoachPlanSe
   }
 }
 
+/** One change of a session, without its label: `70′→50′`, `Z5→Z3`, `moved to 2026-10-07`. */
+function changePart(diff: SessionDiff): string {
+  switch (diff.field) {
+    case 'durationMin':
+      if (diff.after === 0) return 'cancelled';
+      return diff.before.toString() + '′→' + diff.after.toString() + '′';
+    case 'intensity':
+      return diff.before.toUpperCase() + '→' + diff.after.toUpperCase();
+    case 'date':
+      return 'moved to ' + diff.after;
+    case 'sport':
+      return diff.before + '→' + diff.after;
+  }
+}
+
+/** `Bike VO2 5x4`, or the bare id for a session the plan doesn't have. */
+function shortLabel(id: string, sessions: readonly CoachPlanSession[]): string {
+  const session = sessions.find((s) => s.id === id);
+  if (!session) return id;
+  return session.sport.charAt(0).toUpperCase() + session.sport.slice(1) + ' ' + session.title;
+}
+
+/**
+ * One line per changed session, in the order the changes first name it, for the athlete:
+ * `Bike VO2 5x4 70′→50′, Z5→Z3`.
+ */
+export function describeSessionChanges(
+  changes: readonly SessionDiff[],
+  sessions: readonly CoachPlanSession[]
+): string[] {
+  const parts = new Map<string, string[]>();
+  for (const diff of changes) {
+    const list = parts.get(diff.sessionId) ?? [];
+    list.push(changePart(diff));
+    parts.set(diff.sessionId, list);
+  }
+  return [...parts].map(([id, list]) => shortLabel(id, sessions) + ' ' + list.join(', '));
+}
+
 /** One deterministic line for the decision log and the next day's context. */
 export function summarizeChanges(
   changes: readonly SessionDiff[],

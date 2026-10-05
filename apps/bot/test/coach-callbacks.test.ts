@@ -19,6 +19,13 @@ describe('routeCoachDecision', () => {
     });
   });
 
+  it('discuss enqueues coach_discuss for the decision', () => {
+    expect(routeCoachDecision(coachDecisionData('discuss', DECISION))).toMatchObject({
+      commandName: 'coach_discuss',
+      args: [DECISION],
+    });
+  });
+
   it('ignores other buttons', () => {
     expect(routeCoachDecision(seasonDecisionData('save', DECISION))).toBeNull();
     expect(routeCoachDecision('sn:h:10')).toBeNull();

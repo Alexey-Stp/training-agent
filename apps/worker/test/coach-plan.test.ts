@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildWorkoutSteps, Intensity, Sport, type PlannedSessionDraft } from '@triathlon/core';
-import { buildCoachPatches } from '../src/coach-plan';
+import { buildCoachPatches, buildRollbackPatches, patchedRows } from '../src/coach-plan';
 import { MemoryPlanRepo } from './planned-session-fakes';
 
 function draft(date: string, slot: string, sport: Sport, title = 'Session'): PlannedSessionDraft {
@@ -67,5 +67,110 @@ describe('buildCoachPatches', () => {
     );
 
     expect(patches).toEqual([{ kind: 'cancel', id: run.id }]);
+  });
+});
+
+describe('buildRollbackPatches', () => {
+  const DECISION = 'dec1';
+
+  it('deletes the rows the apply created and restores the changed ones', () => {
+    const repo = new MemoryPlanRepo();
+    const before = repo.insert(draft('2026-10-11', 'bike-0', Sport.bike, 'Long ride'));
+    const moved = { ...before, date: '2026-10-10', coachDecisionId: DECISION };
+    const tombstone = repo.insert(draft('2026-10-11', 'bike-0', Sport.bike, 'Long ride'), {
+      deletedAt: new Date(),
+      coachDecisionId: DECISION,
+    });
+    const other = repo.insert(draft('2026-10-10', 'run-0', Sport.run), {
+      deletedAt: new Date(),
+      coachDecisionId: 'older',
+    });
+
+    const patches = buildRollbackPatches([before], [moved, tombstone, other], DECISION);
+
+    expect(patches).toEqual([
+      { kind: 'delete', id: tombstone.id },
+      { kind: 'restore', row: before },
+    ]);
+  });
+
+  it('sends a session with an ICU event back to draft for a re-push', () => {
+    const repo = new MemoryPlanRepo();
+    const pushed = repo.insert(draft('2026-10-07', 'run-0', Sport.run), {
+      status: 'pushed',
+      icuEventId: 5000,
+      pushedHash: 'h1',
+    });
+    const now = { ...pushed, durationMin: 45, status: 'pushed' as const, pushedHash: 'h2' };
+
+    const [patch] = buildRollbackPatches([pushed], [now], DECISION);
+
+    expect(patch).toEqual({
+      kind: 'restore',
+      row: { ...pushed, status: 'draft', icuEventId: 5000, pushedHash: 'h2' },
+    });
+  });
+
+  it('lets push adopt or recreate the event of a cancelled session', () => {
+    const repo = new MemoryPlanRepo();
+    const pushed = repo.insert(draft('2026-10-07', 'run-0', Sport.run), {
+      status: 'pushed',
+      icuEventId: 5000,
+      pushedHash: 'h1',
+    });
+    const cancelled = { ...pushed, deletedAt: new Date(), coachDecisionId: DECISION };
+
+    const [patch] = buildRollbackPatches([pushed], [cancelled], DECISION);
+
+    expect(patch).toEqual({
+      kind: 'restore',
+      row: { ...pushed, status: 'draft', icuEventId: null, pushedHash: null },
+    });
+  });
+
+  it('keeps the athlete’s version and unpushed drafts as they were', () => {
+    const repo = new MemoryPlanRepo();
+    const external = repo.insert(draft('2026-10-07', 'run-0', Sport.run), {
+      status: 'modified_externally',
+      icuEventId: 5000,
+      pushedHash: 'h1',
+    });
+    const local = repo.insert(draft('2026-10-08', 'swim-0', Sport.swim));
+
+    const patches = buildRollbackPatches([external, local], [external, local], DECISION);
+
+    expect(patches.map((p) => (p.kind === 'delete' ? null : p.row.status))).toEqual([
+      'modified_externally',
+      'draft',
+    ]);
+  });
+
+  it('recreates a snapshot row that is gone', () => {
+    const repo = new MemoryPlanRepo();
+    const row = repo.insert(draft('2026-10-07', 'run-0', Sport.run), { icuEventId: 5000 });
+
+    expect(buildRollbackPatches([row], [], DECISION)).toEqual([
+      { kind: 'recreate', row: { ...row, status: 'draft', icuEventId: null, pushedHash: null } },
+    ]);
+  });
+});
+
+describe('patchedRows', () => {
+  it('is the rows an update or cancel touches', () => {
+    const repo = new MemoryPlanRepo();
+    const a = repo.insert(draft('2026-10-07', 'run-0', Sport.run));
+    const b = repo.insert(draft('2026-10-08', 'run-0', Sport.run));
+    const c = repo.insert(draft('2026-10-09', 'run-0', Sport.run));
+
+    const rows = patchedRows(
+      [a, b, c],
+      [
+        { kind: 'update', id: a.id, session: draft('2026-10-07', 'run-0', Sport.run) },
+        { kind: 'cancel', id: c.id },
+        { kind: 'tombstone', session: draft('2026-10-08', 'run-0', Sport.run) },
+      ]
+    );
+
+    expect(rows).toEqual([a, c]);
   });
 });

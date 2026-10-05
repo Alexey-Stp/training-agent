@@ -568,17 +568,25 @@ save coach CoachChatMessage (+ coachDecisionId when applicable)
 reply: text, or text + [✅ Apply | ↩️ Keep my plan] (callback cc:a|k:<decisionId>)
         │ tap
         ▼
-coach_apply / coach_keep job (jobId per tapped message)
-  apply: re-run runGuardrails on today's plan ─ not accept ─► "plan changed", accepted=false
-         buildCoachPatches ─► one transaction: accepted=true (only if unanswered) + PlannedSession writes
-         pushPlannedSessions (ICU event updated/moved/deleted)
-  keep:  accepted=false
+coach_apply / coach_keep / coach_discuss job (jobId per tapped message)
+  answered already ─► "already answered"; older than COACH_DECISION_TTL_HOURS ─► expired, /plan today
+  apply:   re-run runGuardrails on today's plan ─ not accept ─► "plan changed", accepted=false
+           buildCoachPatches, snapshot the rows they touch
+           tx 1: accepted=true, userAction=apply (only if unanswered) + PlannedSession writes
+           pushPlannedSessions scoped to coachDecisionId (ICU event updated/moved/deleted)
+             └ throws ─► buildRollbackPatches ─► tx 2: rows restored, decision unanswered again
+  keep:    accepted=false, userAction=keep
+  discuss: userAction=discuss (still unanswered), seed coach CoachChatMessage with the suggestion,
+           reply asks what to change + [✅ Apply | ➡️ Keep plan]
 ```
 
 - `packages/ai/src/chat/`: `runCoachChat` reuses the suggestion pipeline's `requestStructured` (the generic one-repair call), `CoachSuggestionSchema`, `runGuardrails` and messages. A plain answer writes nothing; a suggestion writes one `CoachDecision` with `origin: 'chat'`. A rejected or fully clamped suggestion is still stored for audit but offers no buttons.
 - `apps/worker/src/coach-plan.ts`: `buildCoachPatches` turns the decision's `SessionDiff`s into row writes. Duration, intensity and sport changes regenerate `steps` (core `buildWorkoutSteps`). A move takes the first free `<sport>-<n>` slot on the new day (tombstones count as taken), keeps the row's `icuEventId` so push moves the event, and leaves a tombstone at the old `(date, slot)`.
 - `PlannedSession.coachDecisionId` protects applied changes: `diffPlan` treats such rows like `modified_externally`, so `/plan` and the season publisher neither overwrite nor recreate them. Push deletes a coach tombstone's ICU event but keeps the row, and skips coach tombstones that have no event.
 - Rate limit: a Redis set per user and local day holds message ids, so a retried job counts once. `COACH_CHAT_DAILY_LIMIT` (core config, default 30).
+- **Answers** (`apps/worker/src/coach-apply.ts`, `handleCoachAnswer`). `CoachDecision.userAction` (`apply | keep | discuss`, migration `9a_coach_user_action`, which backfills it from `accepted`) records the tapped button; `accepted IS NULL` stays the guard against double taps. Discuss doesn't answer the decision, so Apply still works after it.
+- **Rollback.** The push after Apply covers only the decision's rows (`pushPlannedSessions(..., { coachDecisionId })`), so an unrelated draft can't fail it. When it throws, `buildRollbackPatches` (`coach-plan.ts`) compares the pre-apply snapshot with the rows now: tombstones the apply created are deleted, changed rows get their old content back, and a gone row is recreated. Whether the failed push already reached ICU for a row is unknown (an ICU call can succeed and the DB write after it fail), so every restored row with an ICU event goes back to `draft`, and a cancelled one forgets its event id (push adopts the event by `external_id`, or recreates it). `revertDecision` writes all of it in one transaction and resets `accepted`, `answeredAt` and `userAction`. No DB transaction is held across ICU calls. If the revert fails too, the change stays and the athlete is told to `/plan push`.
+- **Expiry.** The bot compares the tapped message's `date` with `COACH_DECISION_TTL_HOURS` before enqueueing (`apps/bot/src/callbacks.ts`, tested through grammY `handleUpdate`); the worker checks `CoachDecision.createdAt` again for jobs already queued.
 
 ### Morning brief (implemented)
 
@@ -595,6 +603,7 @@ runDailyBrief (apps/worker/src/daily-loop/pipeline.ts)
   activity sync ─┘
   context: buildDailyContext ‖ plan today..+6 ‖ RulesContext   (context throws ─► rules only)
   suggest: runCoachSuggestion (LLM + guardrails, fallback inside) or runRulesFallback ─► one CoachDecision
+  render: readiness verdict + today + coach message + proposed changes, [Apply | Keep plan] [Discuss]
   save brief text + buttons + decision id on the run
   send ─ fails ─► run failed, rethrow (job attempts: 3; 403/400 ─► UnrecoverableError)
   run sent
@@ -612,6 +621,8 @@ runDailyBrief (apps/worker/src/daily-loop/pipeline.ts)
 - **Idempotency** (`DailyBriefRun`, unique `(userId, date)`, migration `9_daily_brief`). `claim` inserts the row (`skipDuplicates`) and takes it over with one conditional `updateMany`: pending or failed, or running with `startedAt` older than the 5-minute lease. The job backoff (2 and 4 minutes) outlasts the lease, so a retry after a crash takes the run over. Saving the brief and its decision id before sending means a retry never writes a second `CoachDecision`.
 - **Timings.** Every stage logs `{ userId, date, stage, ms, outcome }` (`daily brief stage`), and the run ends with one `daily brief finished` log. The timings of the latest attempt are stored in `DailyBriefRun.stageTimings`.
 - The pipeline takes its stages as injected deps (`syncWellness`, `syncActivities`, `sendMessage`, repos, `now`), so the tests need no Redis, Prisma, ICU or Telegram.
+- **Brief message** (`daily-loop/render.ts`, snapshot-tested). The readiness line (`daily-loop/readiness.ts`) is deterministic: worst of check-in readiness (≤ 2/5 red, like `ReadinessDownshift`), HRV vs the 30-day baseline and TSB (below −20), ⚪ without data. Proposed changes are one line per session (ai `describeSessionChanges`, e.g. `Bike VO2 5x4 70′→50′, Z5→Z3`). Apply / Keep plan only when there are changes; Discuss always.
+- **Answering a brief.** The buttons use the coach-chat answer flow above. For a daily decision the result replaces the tapped brief: the worker edits the message (`RichReply.editTapped`, `CommandJob.messageId` is the tapped message) to the stored `DailyBriefRun.briefText` plus the result, without buttons. Discuss sends a new message instead.
 
 ## Security Considerations
 
