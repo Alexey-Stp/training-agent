@@ -1,12 +1,16 @@
 import type { Queue } from 'bullmq';
-import type { IcuSyncJob } from '@triathlon/core';
 import type { IcuSyncScheduler } from '../sync-scheduler';
 
 export const DAILY_BRIEF_QUEUE = 'daily-brief';
 export const DAILY_BRIEF_JOB = 'daily-brief';
+/** Delayed one-off job that finishes a brief whose check-in is out */
+export const DAILY_BRIEF_CONTINUE_JOB = 'daily-brief-continue';
 
-/** Same payload as the sync jobs */
-export type DailyBriefJob = IcuSyncJob;
+export interface DailyBriefJob {
+  userId: string;
+  /** Continuation jobs only: the local date the check-in was asked for */
+  checkInDate?: string;
+}
 
 export function dailyBriefSchedulerId(userId: string): string {
   return DAILY_BRIEF_JOB + ':' + userId;
@@ -82,6 +86,44 @@ export function createDailyBriefScheduler(
     },
     async unschedule(userId) {
       await queue.removeJobScheduler(dailyBriefSchedulerId(userId));
+    },
+  };
+}
+
+/** BullMQ rejects `:` in custom job ids, hence the dashes. */
+export function checkInContinuationJobId(userId: string, date: string): string {
+  return 'checkin-' + userId + '-' + date;
+}
+
+type ContinuationQueue = Pick<Queue<DailyBriefJob>, 'add' | 'getJob'>;
+
+export interface CheckInContinuation {
+  /** Queues the brief continuation `delayMs` from now; a second call for the day is a no-op. */
+  schedule(userId: string, date: string): Promise<void>;
+  /** Runs the queued continuation now; does nothing when it already ran or is running. */
+  resume(userId: string, date: string): Promise<void>;
+}
+
+/**
+ * The check-in timeout as one delayed job per athlete and day. Its fixed job id makes a retried
+ * check-in reuse it, and lets an answered check-in promote it instead of starting a second one.
+ */
+export function createCheckInContinuation(
+  queue: ContinuationQueue,
+  delayMs: number
+): CheckInContinuation {
+  return {
+    async schedule(userId, date) {
+      await queue.add(
+        DAILY_BRIEF_CONTINUE_JOB,
+        { userId, checkInDate: date },
+        { ...JOB_OPTS, jobId: checkInContinuationJobId(userId, date), delay: delayMs }
+      );
+    },
+    async resume(userId, date) {
+      const job = await queue.getJob(checkInContinuationJobId(userId, date));
+      if (!job || !(await job.isDelayed())) return;
+      await job.promote();
     },
   };
 }

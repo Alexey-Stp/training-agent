@@ -282,6 +282,7 @@ Proposed
 [💬 Discuss]
 ```
 
+- **Check-in first.** When today has no device wellness from intervals.icu, or HRV is more than 1 SD from its 30-day mean (either way), the brief starts with a one-message check-in: readiness 1–5 and soreness none / mild / severe as buttons. Each answer is saved to today's wellness and its row disappears. The brief follows as soon as both are answered, built with the answers, or after `DAILY_CHECKIN_TIMEOUT_MINUTES` (15) with whatever was answered; with no answer at all it says "No check-in today". Complete, normal data skips the check-in.
 - **Readiness line.** Worst signal wins: check-in readiness ≤ 2/5 (or low HRV plus TSB below −20) is 🔴, low HRV vs the 30-day baseline, TSB below −20 or a 3/5 check-in is 🟡, otherwise 🟢; ⚪ when there is no data.
 - **✅ Apply** writes the changes in one transaction and pushes only those sessions to intervals.icu. The brief is then edited to list the exact changes. If the push fails, the changes are undone (sessions already sent to intervals.icu are marked for the next `/plan push`), the decision stays open and the brief says so.
 - **➡️ Keep plan** records the answer (`CoachDecision.userAction = keep`) and changes nothing.

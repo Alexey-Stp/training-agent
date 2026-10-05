@@ -25,7 +25,7 @@ A-race: Lake Half (half) on 2026-11-22, in 50 days.
 ## Wellness
 
 Today: HRV 52 ms, resting HR 53 bpm, sleep 5.8 h (score 61).
-Check-in: readiness 2/5, soreness 4.
+Check-in: readiness 2/5, soreness severe.
 HRV baseline (30 d): mean 60.0 ± 1.4 ms (n=30); today 52 ms, LOW, below mean − 1 SD.
 Training load on 2026-10-03: CTL 75.0, ATL 100.0, TSB -25.0.
 

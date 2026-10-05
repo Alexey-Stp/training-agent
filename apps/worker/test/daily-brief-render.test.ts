@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Intensity, Sport, parseCoachDecision } from '@triathlon/core';
 import type { CoachDecisionRecord, PlannedSessionSummary, SessionDiff } from '@triathlon/ai';
-import { renderBrief, type BriefInput } from '../src/daily-loop/render';
+import { NO_CHECKIN_NOTE, renderBrief, type BriefInput } from '../src/daily-loop/render';
 
 const TODAY = '2026-10-05';
 const DECISION_ID = 'dec1';
@@ -117,5 +117,21 @@ describe('renderBrief', () => {
       })
     );
     expect(reply.text).toMatchSnapshot();
+  });
+
+  it('notes an unanswered check-in under the readiness line', () => {
+    const reply = renderBrief(
+      input({
+        readiness: { emoji: '⚪', sentence: 'No readiness data today: go by how you feel.' },
+        checkInMissed: true,
+      })
+    );
+    const lines = reply.text.split('\n');
+    const readiness = lines.findIndex((l) => l.startsWith('⚪'));
+    expect(lines[readiness + 1]).toBe(NO_CHECKIN_NOTE);
+  });
+
+  it('adds no note without a missed check-in', () => {
+    expect(renderBrief(input()).text).not.toContain(NO_CHECKIN_NOTE);
   });
 });

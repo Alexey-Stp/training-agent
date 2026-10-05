@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   briefCron,
+  checkInContinuationJobId,
   combineSchedulers,
+  createCheckInContinuation,
   createDailyBriefScheduler,
   dailyBriefSchedulerId,
   reconcileDailyBriefSchedulers,
@@ -217,5 +219,62 @@ describe('combineSchedulers', () => {
 
     await expect(combineSchedulers(a, b).schedule('u1')).rejects.toThrow('redis down');
     expect(b.schedule).toHaveBeenCalledWith('u1');
+  });
+});
+
+describe('createCheckInContinuation', () => {
+  function continuationQueue(job: { delayed: boolean } | null = null) {
+    const promote = vi.fn(() => Promise.resolve());
+    const queue = {
+      add: vi.fn(() => Promise.resolve()),
+      getJob: vi.fn(() =>
+        Promise.resolve(job ? { isDelayed: () => Promise.resolve(job.delayed), promote } : null)
+      ),
+    };
+    return { queue, promote };
+  }
+
+  type ContinuationQueue = Parameters<typeof createCheckInContinuation>[0];
+
+  it('queues one delayed continuation per athlete and day', async () => {
+    const { queue } = continuationQueue();
+    await createCheckInContinuation(queue as unknown as ContinuationQueue, 900_000).schedule(
+      'u1',
+      '2026-10-05'
+    );
+
+    expect(queue.add).toHaveBeenCalledWith(
+      'daily-brief-continue',
+      { userId: 'u1', checkInDate: '2026-10-05' },
+      expect.objectContaining({ jobId: 'checkin-u1-2026-10-05', delay: 900_000, attempts: 3 })
+    );
+  });
+
+  it('uses a job id without colons (BullMQ rejects them)', () => {
+    expect(checkInContinuationJobId('cmg1x2', '2026-10-05')).not.toContain(':');
+  });
+
+  it('promotes the delayed continuation on resume', async () => {
+    const { queue, promote } = continuationQueue({ delayed: true });
+    await createCheckInContinuation(queue as unknown as ContinuationQueue, 900_000).resume(
+      'u1',
+      '2026-10-05'
+    );
+
+    expect(queue.getJob).toHaveBeenCalledWith('checkin-u1-2026-10-05');
+    expect(promote).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['already ran or is running', { delayed: false }],
+    ['is gone', null],
+  ])('does nothing when the continuation %s', async (_, job) => {
+    const { queue, promote } = continuationQueue(job);
+    await createCheckInContinuation(queue as unknown as ContinuationQueue, 900_000).resume(
+      'u1',
+      '2026-10-05'
+    );
+
+    expect(promote).not.toHaveBeenCalled();
   });
 });

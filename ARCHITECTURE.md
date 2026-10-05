@@ -596,14 +596,20 @@ daily-brief queue: one cron scheduler per linked athlete
         │ fires at the local time (BullMQ cron-parser handles DST)
         ▼
 runDailyBrief (apps/worker/src/daily-loop/pipeline.ts)
-  date = localToday(now, timezone)
+  date = localToday(now, timezone)   (continuation: the job's checkInDate)
   claim DailyBriefRun (userId, date) ─ sent ─► skip ─ running within lease ─► BriefInProgressError (retry)
+                                     ─ awaiting_checkin ─► skip (only the continuation claims it)
   brief already stored (retry after a failed send)? ─ yes ─► send it
+  check-in already sent (continuation)? ─ yes ─► skip sync and check-in, reuse the stored stale/dataAsOf
   wellness sync ─┐ throws ─► stale, data as of the failed sync's cursor
   activity sync ─┘
+  checkin: no device wellness today, or |HRV − mean| > 1 SD (30-day baseline), and not answered yet?
+     ─ yes ─► queue continuation (delayed DAILY_CHECKIN_TIMEOUT_MINUTES, jobId checkin-<userId>-<date>)
+              ─► send check-in [1..5] [None | Mild | Severe] ─► run awaiting_checkin, stop
   context: buildDailyContext ‖ plan today..+6 ‖ RulesContext   (context throws ─► rules only)
   suggest: runCoachSuggestion (LLM + guardrails, fallback inside) or runRulesFallback ─► one CoachDecision
-  render: readiness verdict + today + coach message + proposed changes, [Apply | Keep plan] [Discuss]
+  render: readiness verdict (+ "No check-in today" when unanswered) + today + coach message
+          + proposed changes, [Apply | Keep plan] [Discuss]
   save brief text + buttons + decision id on the run
   send ─ fails ─► run failed, rethrow (job attempts: 3; 403/400 ─► UnrecoverableError)
   run sent
@@ -616,12 +622,14 @@ runDailyBrief (apps/worker/src/daily-loop/pipeline.ts)
 | LLM (down, invalid twice, guardrail reject) | rules-engine fallback inside `runCoachSuggestion`, `source = fallback`                                      |
 | plan or RulesContext read                   | run marked failed, job retried                                                                              |
 | Telegram send                               | run marked failed, job retried (3 attempts); the retry resends the stored brief                             |
+| check-in send                               | run marked failed, job retried; the queued continuation (same job id) is reused                             |
 
 - **Scheduling** (`daily-loop/scheduler.ts`). `createDailyBriefScheduler` is combined with the ICU sync scheduler (`combineSchedulers`), so connect/disconnect add and remove it. `reconcileDailyBriefSchedulers` runs at startup and reschedules athletes whose `pattern` or `tz` changed. A cron scheduler doesn't fire on creation.
 - **Idempotency** (`DailyBriefRun`, unique `(userId, date)`, migration `9_daily_brief`). `claim` inserts the row (`skipDuplicates`) and takes it over with one conditional `updateMany`: pending or failed, or running with `startedAt` older than the 5-minute lease. The job backoff (2 and 4 minutes) outlasts the lease, so a retry after a crash takes the run over. Saving the brief and its decision id before sending means a retry never writes a second `CoachDecision`.
 - **Timings.** Every stage logs `{ userId, date, stage, ms, outcome }` (`daily brief stage`), and the run ends with one `daily brief finished` log. The timings of the latest attempt are stored in `DailyBriefRun.stageTimings`.
 - The pipeline takes its stages as injected deps (`syncWellness`, `syncActivities`, `sendMessage`, repos, `now`), so the tests need no Redis, Prisma, ICU or Telegram.
 - **Brief message** (`daily-loop/render.ts`, snapshot-tested). The readiness line (`daily-loop/readiness.ts`) is deterministic: worst of check-in readiness (≤ 2/5 red, like `ReadinessDownshift`), HRV vs the 30-day baseline and TSB (below −20), ⚪ without data. Proposed changes are one line per session (ai `describeSessionChanges`, e.g. `Bike VO2 5x4 70′→50′, Z5→Z3`). Apply / Keep plan only when there are changes; Discuss always.
+- **Check-in** (`daily-loop/checkin.ts`, `checkin-answer.ts`, migration `9b_daily_checkin`). `checkInReason` is pure: no row or no device data → `no_data`, HRV more than 1 SD off the 30-day mean in either direction → `hrv_deviation` (too few readings for a baseline never triggers), a day with both answers → none. The buttons carry `ci:r:<1-5>` / `ci:s:<0-2>` (core `checkin.ts`; soreness none=0, mild=1, severe=2, rendered as the label in the prompt). The bot enqueues `checkin_answer` with a per-button job id and leaves the buttons; the worker finds the run by `DailyBriefRun.checkInMessageId`, writes only the subjective column (`checkInRepo.recordCheckIn`: first answer wins) and edits the message to the remaining question. These taps skip the `ProcessedMessage` check, because both answers share one message id. With both answers in while the run is `awaiting_checkin`, it promotes the delayed continuation job; otherwise that job fires at the timeout. Late answers are still stored. Wellness sync never touches these columns (`WELLNESS_DEVICE_FIELDS`).
 - **Answering a brief.** The buttons use the coach-chat answer flow above. For a daily decision the result replaces the tapped brief: the worker edits the message (`RichReply.editTapped`, `CommandJob.messageId` is the tapped message) to the stored `DailyBriefRun.briefText` plus the result, without buttons. Discuss sends a new message instead.
 
 ## Security Considerations

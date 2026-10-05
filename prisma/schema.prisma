@@ -383,28 +383,32 @@ model CoachChatMessage {
 enum DailyBriefStatus {
   pending
   running
+  awaiting_checkin // check-in sent; a delayed continuation job finishes the brief
   sent
   failed
 }
 
 // One morning pipeline run per athlete and local day (apps/worker daily-loop/pipeline.ts)
 model DailyBriefRun {
-  id              String           @id @default(cuid())
-  userId          String
-  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  date            String // YYYY-MM-DD in the athlete's local time
-  status          DailyBriefStatus @default(pending)
-  startedAt       DateTime? // lease of the run in progress
-  coachDecisionId String?
-  briefText       String? // rendered brief (Telegram HTML); a retry resends it
-  briefKeyboard   Json? // InlineButton[][] sent with the brief
-  stale           Boolean          @default(false) // an ICU sync failed, data as of dataAsOf
-  dataAsOf        DateTime?
-  stageTimings    Json             @default("{}") // stage → ms
-  error           String?
-  sentAt          DateTime?
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
+  id               String           @id @default(cuid())
+  userId           String
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date             String // YYYY-MM-DD in the athlete's local time
+  status           DailyBriefStatus @default(pending)
+  startedAt        DateTime? // lease of the run in progress
+  coachDecisionId  String?
+  briefText        String? // rendered brief (Telegram HTML); a retry resends it
+  briefKeyboard    Json? // InlineButton[][] sent with the brief
+  stale            Boolean          @default(false) // an ICU sync failed, data as of dataAsOf
+  dataAsOf         DateTime?
+  stageTimings     Json             @default("{}") // stage → ms
+  error            String?
+  sentAt           DateTime?
+  checkInMessageId Int? // Telegram message carrying the check-in buttons
+  checkInSentAt    DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
 
   @@unique([userId, date])
+  @@index([userId, checkInMessageId])
 }

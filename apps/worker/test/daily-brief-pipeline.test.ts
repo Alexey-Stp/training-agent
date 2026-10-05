@@ -16,6 +16,7 @@ import {
   type CoachSuggestion,
   type DailyContextDeps,
   type PlannedSessionSummary,
+  type WellnessDay,
 } from '@triathlon/ai';
 import { IcuServerError } from '@triathlon/integrations-icu';
 import {
@@ -25,10 +26,12 @@ import {
   type DailyBriefDeps,
 } from '../src/daily-loop/pipeline';
 import type {
+  CheckInRun,
   ClaimResult,
   DailyBriefRun,
   DailyBriefRunRepo,
   SavedBrief,
+  SavedCheckIn,
   StageTimings,
 } from '../src/daily-loop/run-store';
 import type { BriefProfile } from '../src/daily-loop/scheduler';
@@ -65,6 +68,30 @@ const LOW_READINESS: RulesContext = {
 };
 const LLM_MESSAGE = 'Ride the VO2 session as planned, you are fresh.';
 
+function wellnessDay(date: string, values: Partial<WellnessDay> = {}): WellnessDay {
+  return {
+    date,
+    hrv: null,
+    restingHr: null,
+    sleepHours: null,
+    sleepScore: null,
+    weightKg: null,
+    ctl: null,
+    atl: null,
+    tsb: null,
+    subjectiveReadiness: null,
+    soreness: null,
+    ...values,
+  };
+}
+
+const DEVICE = { hrv: 62, restingHr: 48, sleepHours: 7.5 };
+
+/** Device data on the asked day and too little HRV history for a baseline: no check-in */
+function normalDay(_from: string, to: string): WellnessDay[] {
+  return [wellnessDay(to, DEVICE)];
+}
+
 function planned(
   date: string,
   slot: string,
@@ -100,16 +127,29 @@ const KEEP: CoachSuggestion = {
 };
 
 /** Same semantics as the Prisma repo: one row per (userId, date), claimed with a lease. */
-class MemoryRuns implements DailyBriefRunRepo {
-  readonly rows = new Map<
-    string,
-    DailyBriefRun & { startedAt: Date | null; error: string | null }
-  >();
+type RunRow = DailyBriefRun & {
+  userId: string;
+  date: string;
+  startedAt: Date | null;
+  error: string | null;
+  checkInMessageId: number | null;
+};
 
-  claim(userId: string, date: string, now: Date, leaseMs: number): Promise<ClaimResult> {
+class MemoryRuns implements DailyBriefRunRepo {
+  readonly rows = new Map<string, RunRow>();
+
+  claim(
+    userId: string,
+    date: string,
+    now: Date,
+    leaseMs: number,
+    opts: { continuation?: boolean } = {}
+  ): Promise<ClaimResult> {
     const key = userId + '|' + date;
-    const row = this.rows.get(key) ?? {
+    const row: RunRow = this.rows.get(key) ?? {
       id: 'run-' + key,
+      userId,
+      date,
       status: 'pending',
       coachDecisionId: null,
       briefText: null,
@@ -117,13 +157,17 @@ class MemoryRuns implements DailyBriefRunRepo {
       stale: false,
       dataAsOf: null,
       stageTimings: {},
+      checkInSentAt: null,
       startedAt: null,
       error: null,
+      checkInMessageId: null,
     };
     this.rows.set(key, row);
     const leaseExpired =
       row.status === 'running' && (row.startedAt?.getTime() ?? 0) < now.getTime() - leaseMs;
     if (row.status === 'sent') return Promise.resolve({ status: 'already_sent' });
+    if (row.status === 'awaiting_checkin' && !opts.continuation)
+      return Promise.resolve({ status: 'awaiting_checkin' });
     if (row.status === 'running' && !leaseExpired)
       return Promise.resolve({ status: 'in_progress' });
     row.status = 'running';
@@ -136,6 +180,25 @@ class MemoryRuns implements DailyBriefRunRepo {
     return Promise.resolve();
   }
 
+  saveCheckIn(id: string, checkIn: SavedCheckIn): Promise<void> {
+    Object.assign(this.byId(id), {
+      status: 'awaiting_checkin',
+      checkInMessageId: checkIn.messageId,
+      checkInSentAt: checkIn.sentAt,
+      stale: checkIn.stale,
+      dataAsOf: checkIn.dataAsOf,
+      stageTimings: checkIn.stageTimings,
+    });
+    return Promise.resolve();
+  }
+
+  findByCheckInMessage(userId: string, messageId: number): Promise<CheckInRun | null> {
+    const row = [...this.rows.values()].find(
+      (r) => r.userId === userId && r.checkInMessageId === messageId
+    );
+    return Promise.resolve(row ? { id: row.id, date: row.date, status: row.status } : null);
+  }
+
   markSent(id: string, _sentAt: Date, stageTimings: StageTimings): Promise<void> {
     Object.assign(this.byId(id), { status: 'sent', stageTimings });
     return Promise.resolve();
@@ -146,7 +209,7 @@ class MemoryRuns implements DailyBriefRunRepo {
     return Promise.resolve();
   }
 
-  only(): DailyBriefRun & { error: string | null } {
+  only(): RunRow {
     expect(this.rows.size).toBe(1);
     return [...this.rows.values()][0];
   }
@@ -167,12 +230,18 @@ class MemoryDecisions implements CoachDecisionSink {
   }
 }
 
-function contextDeps(sessions: PlannedSessionSummary[]): DailyContextDeps {
+function contextDeps(
+  sessions: PlannedSessionSummary[],
+  wellness: (from: string, to: string) => WellnessDay[] = normalDay
+): DailyContextDeps {
   return {
     profiles: { findProfile: () => Promise.resolve(PROFILE) },
     seasons: { findActiveSeason: () => Promise.resolve(null) },
     races: { listUpcoming: () => Promise.resolve([]) },
-    wellness: { listRange: () => Promise.resolve([]) },
+    wellness: {
+      listRange: (_userId, from, to) =>
+        Promise.resolve(wellness(from, to).filter((w) => w.date >= from && w.date <= to)),
+    },
     activities: { listRange: () => Promise.resolve([]) },
     planned: {
       listRange: (_userId, from, to) =>
@@ -187,7 +256,16 @@ let runs: MemoryRuns;
 let decisions: MemoryDecisions;
 let connection: IcuConnectionRecord | null;
 let sendMessage: ReturnType<
-  typeof vi.fn<(chatId: number, text: string, options: TelegramMessageOptions) => Promise<unknown>>
+  typeof vi.fn<
+    (
+      chatId: number,
+      text: string,
+      options: TelegramMessageOptions
+    ) => Promise<{ message_id: number }>
+  >
+>;
+let scheduleCheckInTimeout: ReturnType<
+  typeof vi.fn<(userId: string, date: string) => Promise<void>>
 >;
 let logger: { info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> };
 
@@ -221,6 +299,7 @@ function deps(overrides: Partial<DailyBriefDeps> = {}): DailyBriefDeps {
     provider: llm(KEEP),
     decisions,
     sendMessage,
+    scheduleCheckInTimeout,
     logger,
     now: () => NOW,
     ...overrides,
@@ -259,6 +338,10 @@ beforeEach(() => {
     calls.push('send');
     return Promise.resolve({ message_id: 1 });
   });
+  scheduleCheckInTimeout = vi.fn(() => {
+    calls.push('timeout');
+    return Promise.resolve();
+  });
   logger = { info: vi.fn(), warn: vi.fn() };
 });
 
@@ -282,7 +365,7 @@ describe('runDailyBrief', () => {
     expect(sentText()).toContain('VO2 5x4 (60min • Z4)');
     expect(sentText()).toContain(LLM_MESSAGE);
     expect(sentText()).not.toContain('intervals.icu unavailable');
-    expect(sentText()).toContain('⚪ No readiness data today');
+    expect(sentText()).toContain('🟢 Recovered');
     // No changes: only Discuss
     const options = sendMessage.mock.calls[0][2];
     expect(options.parse_mode).toBe('HTML');
@@ -532,6 +615,7 @@ describe('runDailyBrief', () => {
     expect(stages.map((s) => [s.stage, s.outcome])).toEqual([
       ['wellness', 'error'],
       ['activity', 'ok'],
+      ['checkin', 'ok'],
       ['context', 'ok'],
       ['suggest', 'ok'],
       ['send', 'ok'],
@@ -551,10 +635,137 @@ describe('runDailyBrief', () => {
     );
     expect(Object.keys(runs.only().stageTimings).sort((a, b) => a.localeCompare(b))).toEqual([
       'activity',
+      'checkin',
       'context',
       'send',
       'suggest',
       'wellness',
     ]);
+  });
+});
+
+describe('morning check-in', () => {
+  /** 30 days of HRV around 60 ± 1 ms before today, then today's reading */
+  function hrvHistory(todayHrv: number): WellnessDay[] {
+    const days = Array.from({ length: 30 }, (_, i) => {
+      const date = new Date(Date.UTC(2026, 8, 5 + i)).toISOString().slice(0, 10);
+      return wellnessDay(date, { hrv: i % 2 === 0 ? 59 : 61, restingHr: 48 });
+    });
+    return [...days, wellnessDay(TODAY, { hrv: todayHrv, restingHr: 48, sleepHours: 7 })];
+  }
+
+  function keyboardData(call = 0): string[][] {
+    const keyboard = sendMessage.mock.calls[call][2].reply_markup?.inline_keyboard ?? [];
+    return keyboard.map((row) => row.map((b) => b.callback_data));
+  }
+
+  it('sends the check-in first when today has no wellness row, and waits', async () => {
+    const result = await runDailyBrief(USER_ID, deps({ context: contextDeps(WEEK, () => []) }));
+
+    expect(result).toEqual({ status: 'awaiting_checkin', date: TODAY, reason: 'no_data' });
+    expect(calls).toEqual(['wellness', 'activity', 'timeout', 'send']);
+    expect(scheduleCheckInTimeout).toHaveBeenCalledWith(USER_ID, TODAY);
+    expect(sentText()).toContain('Quick check-in');
+    expect(keyboardData()).toEqual([
+      ['ci:r:1', 'ci:r:2', 'ci:r:3', 'ci:r:4', 'ci:r:5'],
+      ['ci:s:0', 'ci:s:1', 'ci:s:2'],
+    ]);
+    expect(decisions.records).toHaveLength(0);
+    expect(runs.only()).toMatchObject({
+      status: 'awaiting_checkin',
+      checkInMessageId: 1,
+      checkInSentAt: NOW,
+      briefText: null,
+    });
+  });
+
+  it.each([
+    ['low', 50],
+    ['high', 70],
+  ])('sends the check-in when HRV is %s (more than 1 SD off the baseline)', async (_, hrv) => {
+    const result = await runDailyBrief(
+      USER_ID,
+      deps({ context: contextDeps(WEEK, () => hrvHistory(hrv)) })
+    );
+
+    expect(result).toMatchObject({ status: 'awaiting_checkin', reason: 'hrv_deviation' });
+  });
+
+  it('sends no check-in when wellness is complete and normal', async () => {
+    const result = await runDailyBrief(
+      USER_ID,
+      deps({ context: contextDeps(WEEK, () => hrvHistory(60)) })
+    );
+
+    expect(result).toMatchObject({ status: 'sent' });
+    expect(calls).toEqual(['wellness', 'activity', 'llm', 'send']);
+    expect(scheduleCheckInTimeout).not.toHaveBeenCalled();
+    expect(sentText()).not.toContain('check-in');
+  });
+
+  it('skips other triggers of the day while the check-in is out', async () => {
+    const context = contextDeps(WEEK, () => []);
+    await runDailyBrief(USER_ID, deps({ context }));
+    calls = [];
+
+    const retry = await runDailyBrief(USER_ID, deps({ context }));
+
+    expect(retry).toEqual({ status: 'skipped', reason: 'awaiting_checkin' });
+    expect(calls).toEqual([]);
+  });
+
+  it('sends the brief with "No check-in today" after the timeout, without syncing again', async () => {
+    const context = contextDeps(WEEK, () => []);
+    await runDailyBrief(USER_ID, deps({ context, syncActivities: icuDown }));
+    calls = [];
+
+    const later = new Date(NOW.getTime() + 15 * 60_000);
+    const result = await runDailyBrief(USER_ID, deps({ context, now: () => later }), {
+      checkInDate: TODAY,
+    });
+
+    expect(result).toMatchObject({ status: 'sent', date: TODAY, stale: true });
+    expect(calls).toEqual(['llm', 'send']);
+    expect(sentText(1)).toContain('No check-in today.');
+    // Freshness of the first run's sync
+    expect(sentText(1)).toContain('intervals.icu unavailable');
+    expect(runs.only().status).toBe('sent');
+  });
+
+  it('puts the answers in the prompt when the athlete answered', async () => {
+    let wellness: WellnessDay[] = [];
+    const context = contextDeps(WEEK, () => wellness);
+    await runDailyBrief(USER_ID, deps({ context }));
+    wellness = [wellnessDay(TODAY, { subjectiveReadiness: 4, soreness: 1 })];
+
+    const provider = llm(KEEP);
+    await runDailyBrief(USER_ID, deps({ context, provider }), { checkInDate: TODAY });
+
+    expect(provider.calls[0].prompt).toContain('Check-in: readiness 4/5, soreness mild.');
+    expect(sentText(1)).not.toContain('No check-in today.');
+  });
+
+  it('finishes the brief for the check-in date even after local midnight', async () => {
+    await runDailyBrief(USER_ID, deps({ context: contextDeps(WEEK, () => []) }));
+
+    const nextDay = new Date('2026-10-05T22:05:00Z');
+    const result = await runDailyBrief(
+      USER_ID,
+      deps({ context: contextDeps(WEEK, () => []), now: () => nextDay }),
+      { checkInDate: TODAY }
+    );
+
+    expect(result).toMatchObject({ status: 'sent', date: TODAY });
+  });
+
+  it('does not wait for a check-in the athlete already answered', async () => {
+    const answered = [wellnessDay(TODAY, { subjectiveReadiness: 3, soreness: 0 })];
+    const result = await runDailyBrief(
+      USER_ID,
+      deps({ context: contextDeps(WEEK, () => answered) })
+    );
+
+    expect(result).toMatchObject({ status: 'sent' });
+    expect(scheduleCheckInTimeout).not.toHaveBeenCalled();
   });
 });

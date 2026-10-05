@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Bot } from 'grammy';
 import type { Update, UserFromGetMe } from 'grammy/types';
 import {
+  checkInData,
   coachDecisionData,
   MSG_DECISION_EXPIRED,
   seasonDecisionData,
@@ -106,6 +107,36 @@ function tap(data: string, sentAt = SENT): Promise<void> {
 function methods(): string[] {
   return calls.map((c) => c.method);
 }
+
+describe('check-in buttons', () => {
+  it('enqueues the answer with a per-button job id and keeps the buttons', async () => {
+    await tap(checkInData('r', 4));
+
+    expect(jobs).toEqual([
+      {
+        job: {
+          telegramChatId: CHAT_ID,
+          telegramUserId: USER_ID,
+          messageId: MESSAGE_ID,
+          commandName: 'checkin_answer',
+          args: ['r', '4'],
+          rawText: '',
+        },
+        jobId: `cb-${CHAT_ID.toString()}-${MESSAGE_ID.toString()}-r4`,
+      },
+    ]);
+    // The worker edits the message, so the other question stays answerable
+    expect(methods()).toEqual(['answerCallbackQuery']);
+    expect(calls[0].payload).toMatchObject({ text: 'Saved' });
+  });
+
+  it('is not subject to the coach TTL', async () => {
+    await tap(checkInData('s', 0), new Date(now.getTime() - 48 * 3_600_000));
+
+    expect(jobs).toHaveLength(1);
+    expect(methods()).toEqual(['answerCallbackQuery']);
+  });
+});
 
 describe('coach decision buttons', () => {
   it.each([

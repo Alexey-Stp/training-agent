@@ -41,6 +41,8 @@ const envSchema = z.object({
     .default('true')
     .transform((v) => v === 'true'),
   DAILY_BRIEF_DEFAULT_TIME: z.string().regex(BRIEF_TIME_RE, 'must be HH:mm (24h)').default('06:30'),
+  // Morning check-in: minutes the brief waits for readiness/soreness answers before it goes out
+  DAILY_CHECKIN_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(15),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

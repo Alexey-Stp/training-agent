@@ -23,7 +23,11 @@ export interface BriefInput {
   /** An ICU sync failed: the brief uses data as of `dataAsOf` (null: never synced) */
   stale: boolean;
   dataAsOf: Date | null;
+  /** The check-in went out and got no answer before the timeout */
+  checkInMissed?: boolean;
 }
+
+export const NO_CHECKIN_NOTE = 'No check-in today.';
 
 export function staleNote(dataAsOf: Date | null, timezone: string): string {
   const asOf =
@@ -58,7 +62,8 @@ function proposedLines(input: BriefInput): string[] {
 }
 
 /**
- * The morning brief: date, stale-data note, readiness verdict, today's sessions, the coach's
+ * The morning brief: date, stale-data note, readiness verdict (and a note when the check-in
+ * went unanswered), today's sessions, the coach's
  * recommendation and the exact changes it proposes, with Apply / Keep plan / Discuss buttons.
  */
 export function renderBrief(input: BriefInput): RichReply {
@@ -74,6 +79,7 @@ export function renderBrief(input: BriefInput): RichReply {
     ...(input.stale ? ['', escapeHtml(staleNote(input.dataAsOf, input.timezone))] : []),
     '',
     readiness,
+    ...(input.checkInMissed ? [NO_CHECKIN_NOTE] : []),
     '',
     ...today,
     '',

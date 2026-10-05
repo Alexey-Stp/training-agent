@@ -74,7 +74,18 @@ describe('buildDailyContext', () => {
     fixture.wellness = [{ ...emptyWellnessDay(DATE), subjectiveReadiness: 3, soreness: 2 }];
     const { prompt } = await buildDailyContext(fakeDeps(fixture), USER_ID, DATE);
     expect(prompt).toContain('Today: no device data for 2026-10-03.');
-    expect(prompt).toContain('Check-in: readiness 3/5, soreness 2.');
+    expect(prompt).toContain('Check-in: readiness 3/5, soreness severe.');
+  });
+
+  it('renders a partial check-in and soreness labels', async () => {
+    const fixture = emptyAthlete();
+    fixture.wellness = [{ ...emptyWellnessDay(DATE), subjectiveReadiness: 4, soreness: null }];
+    const partial = await buildDailyContext(fakeDeps(fixture), USER_ID, DATE);
+    expect(partial.prompt).toContain('Check-in: readiness 4/5, soreness n/a.');
+
+    fixture.wellness = [{ ...emptyWellnessDay(DATE), subjectiveReadiness: null, soreness: 1 }];
+    const sore = await buildDailyContext(fakeDeps(fixture), USER_ID, DATE);
+    expect(sore.prompt).toContain('soreness mild.');
   });
 
   it('collects the fatigue signals of the fatigued athlete', async () => {
