@@ -110,8 +110,9 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 - `plan-push.ts` - `pushPlannedSessions`: creates/updates/deletes ICU `WORKOUT` events for pending sessions, `external_id` orphan adoption, `hashIcuEvent` (injected deps)
 - `plan-reconcile.ts` - `icu-plan-reconcile` job processor: flags sessions whose ICU event was moved/edited/deleted as `modified_externally` (injected deps)
 - `plan-command.ts` - `/plan push` handler (store, push, reply)
-- `daily-loop/` - Morning brief (`pipeline.ts`, `render.ts`, `checkin*.ts`), evening close-out (`closeout.ts`, `closeout-render.ts`, `closeout-store.ts`), shared per-athlete cron schedulers (`scheduler.ts`) and run helpers (`run-helpers.ts`)
-- `db.ts` - Database utilities (user creation, deduplication, `icuConnectionRepo`, `activityRepo`, `wellnessRepo`, `plannedSessionRepo`, `raceRepo`, `seasonRepo` (active season, drafts, transactional activation), `profileRepo`, `loadTrainingHours`, `dailyBriefRunRepo`, `eveningCloseoutRunRepo`, `closeoutRepo`)
+- `daily-loop/` - Morning brief (`pipeline.ts`, `render.ts`, `checkin*.ts`), evening close-out (`closeout.ts`, `closeout-render.ts`, `closeout-store.ts`), shared per-athlete cron schedulers (`scheduler.ts`, also the weekly stats one) and run helpers (`run-helpers.ts`)
+- `reviews/` - Weekly stats job (`weekly-stats.ts` `runWeeklyStats`, repo interface in `weekly-stats-store.ts`)
+- `db.ts` - Database utilities (user creation, deduplication, `icuConnectionRepo`, `activityRepo`, `wellnessRepo`, `plannedSessionRepo`, `raceRepo`, `seasonRepo` (active season, drafts, transactional activation), `profileRepo`, `loadTrainingHours`, `dailyBriefRunRepo`, `eveningCloseoutRunRepo`, `closeoutRepo`, `weeklyStatsRepo`)
 
 **Design Principles**:
 
@@ -137,6 +138,8 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 - `planned-session.ts` - `toPlannedSessions`: adapter from the rules-applied `WeekPlan` to `PlannedSession` rows
 - `rules-engine.ts` - `applyRules` (corrects a plan) and `checkHardRules` (reports the hard rules a plan still breaks as `RuleViolation[]`)
 - `season/` - Season domain model (`Race`, `SeasonPlan`, `TrainingBlock` and their enums), `validateBlockSequence` / `validateSeasonPlan` / `assertValidSeasonPlan` (`SeasonValidationError`), the zod-checked `serializeSeasonPlan` / `parseSeasonPlan`, and `generateSeasonPlan` (`block-generator.ts`): blocks allocated backwards from the A-race with short-runway compression (`block-sequence.ts`), a ≤8% ramp with 3:1 recovery weeks from the current load (`volume.ts`), and a per-sport split with weak-sport bias (`sport-split.ts`). All constants are in `DEFAULT_BLOCK_GENERATOR_CONFIG` (`generator-config.ts`). `week-expander.ts` has `expandWeek(block, weekIndex, profile)`. It picks a session template for the block type (base, build/peak, taper/race, recovery/transition), places the sessions by the profile's day preferences, sizes them to the week's targets, and gates the result through `applyRules` + `checkHardRules`. `window.ts` has the timezone-aware date helpers (`localToday`, `rollingWindow`, `clipToSeason`) and `seasonDraftsForRange`; `table.ts` has `formatSeasonTable`
+- `closeout.ts` - Close-out matching (`matchActivities`), `isKeySession`, `guessIntensity`, `hrIntensity` (average HR vs LTHR, Friel bands)
+- `reviews/` - `iso-week.ts` (`isoWeekKey`, `isoWeekRange`, `previousIsoWeek`) and `weekly-stats.ts` (`computeWeeklyStats`: pure planned-vs-actual summary of one ISO week)
 - `season-wizard.ts` - Contract between the bot wizard and the worker: the `season_*` command names, the preview button callback data (`seasonDecisionData` / `parseSeasonDecision`) and the shared answer validation (`parseWeeklyHours`, `WEAK_SPORT_CHOICES`)
 
 **Design Principles**:
@@ -656,6 +659,22 @@ runEveningCloseout (apps/worker/src/daily-loop/closeout.ts)
 - **Writes** (`closeoutRepo.apply`, one array transaction). Matched sessions are set `completed` with `deviationPct`/`actualIntensity`, and unmatched ones `skipped`. Each of the day's activities gets `closedOutAt` and its `plannedSessionId` (unique, `ON DELETE SET NULL`), cleared first so a link can move between activities. Only rows of that date are touched: sessions without `deletedAt` and activities by `startDateLocal`. `modified_externally` sessions that nothing matched keep their status. Activity sync updates only the ICU fields, so it never resets the link. `completed`/`skipped` rows are already protected from `/plan`, the season publisher and the coach (`PROTECTED_STATUSES`, guardrail `lockedStatuses`).
 - **Weekly review data.** `PlannedSession.status`/`deviationPct`/`actualIntensity` per session, plus unplanned activities (`closedOutAt IS NOT NULL AND plannedSessionId IS NULL`). Migration `9c_evening_closeout` also adds `Profile.lthr`/`closeoutTime` and `@@index([userId, startDateLocal])` on `Activity`.
 - **Scheduling.** The brief and close-out schedulers come from one cron-scheduler factory and reconcile in `scheduler.ts`, parametrized by job name and `repeat(profile)`. Both are combined into the connect/disconnect scheduler and reconciled at startup. A disabled feature reconciles against no athletes, so its schedulers are removed.
+
+### Weekly stats (implemented)
+
+```
+weekly-stats queue: one cron scheduler per linked athlete (same factory and reconcile as the close-out)
+  key weekly-stats:<userId>, pattern '<m> <h> * * 1' from WEEKLY_STATS_TIME, tz Profile.timezone
+        │
+        ▼
+runWeeklyStats (apps/worker/src/reviews/weekly-stats.ts)
+  isoWeek = job.isoWeek ?? previousIsoWeek(localToday(now, timezone))
+  weeklyStatsRepo.loadRange(week.from − 7 .. week.to): sessions (with tombstones), activities, wellness, Profile.lthr
+  core computeWeeklyStats ─► weeklyStatsRepo.upsert (userId, isoWeek)
+```
+
+- **Computation** (core `reviews/weekly-stats.ts`, pure, deterministic: sorted lists, one decimal). Planned = live non-rest sessions of the week. Actual = all of the week's activities, unplanned included. Per sport: planned/actual minutes, `compliancePct` (null when nothing was planned, never 0), actual distance (km) and TSS (`Activity.load`); planned distance/TSS are null because `PlannedSession` has neither. `unplannedWeek` when no session was planned. Key sessions (`isKeySession`) split by status: `completed` → hit, `skipped` → missed, anything else → pending. Intensity: each activity's minutes go to Z1-2 or Z3+ by `hrIntensity(avgHr, lthr)`, or unknown. Load: the latest CTL row in the 7 days before the week → the latest in the week, with deltas. Wellness: week averages and HRV change vs the 7 days before.
+- **Storage.** `WeeklyStats` (migration `9d_weekly_stats`): unique `(userId, isoWeek)`, `weekStart`/`weekEnd`, `unplannedWeek`, and the full result as versioned JSON in `stats` (`WEEKLY_STATS_VERSION`). The upsert is idempotent, so the job needs no run row or lease; a retry recomputes the same week.
 
 ## Security Considerations
 

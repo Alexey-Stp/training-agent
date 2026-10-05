@@ -324,6 +324,20 @@ It is quiet by default. A short message goes out only when something is worth me
 
 Set `EVENING_CLOSEOUT_ENABLED=false` to turn it off.
 
+### Weekly stats
+
+Every Monday at `WEEKLY_STATS_TIME` (06:00) in the athlete's timezone, the worker sums up the ISO week that just ended and stores it as one `WeeklyStats` row per athlete and week (for example `2026-W40`). Later prompts and the weekly review read these numbers.
+
+- **Volume per sport.** Planned vs actual minutes, with compliance as actual / planned in percent. Actual distance and TSS come from intervals.icu activities. Planned sessions have no distance or TSS, so those stay empty.
+- **Planned** means the week's live, non-rest sessions. **Actual** means every activity of the week, including unplanned ones.
+- **Off week.** A week with no planned sessions is marked `unplannedWeek`, and its compliance is empty (`null`), not 0%. The same applies to a sport that was trained but not planned.
+- **Key sessions** (Z4/Z5 or 90 minutes or more): hit (`completed`), missed (`skipped`, listed by title), or pending when the close-out never ran.
+- **Intensity distribution.** Each activity's minutes count as Z1-2 or Z3+ by its average heart rate against `/set lthr`. Without an LTHR or a heart rate, the minutes are counted as unknown.
+- **Load.** CTL/ATL/TSB from the last value before the week to the last value in it.
+- **Wellness.** Week averages of HRV, resting HR, sleep, readiness and soreness, plus the HRV change against the week before.
+
+A rerun replaces the week's row. Set `WEEKLY_STATS_ENABLED=false` to turn it off.
+
 ## intervals.icu Integration
 
 `packages/integrations-icu` (`@triathlon/integrations-icu`) is a typed REST client for [intervals.icu](https://intervals.icu). The worker uses it to validate credentials in `/connect icu` and to sync activities and wellness.

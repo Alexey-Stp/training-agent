@@ -11,3 +11,4 @@ export * from './season-wizard';
 export * from './coach-chat';
 export * from './checkin';
 export * from './closeout';
+export * from './reviews';

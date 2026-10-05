@@ -41,6 +41,7 @@ import {
   closeoutRepo,
   eveningCloseoutRunRepo,
   checkInRepo,
+  weeklyStatsRepo,
 } from './db';
 import {
   handleStart,
@@ -93,19 +94,24 @@ import {
 import {
   DAILY_BRIEF_QUEUE,
   EVENING_CLOSEOUT_QUEUE,
+  WEEKLY_STATS_QUEUE,
   combineSchedulers,
   createCheckInContinuation,
   createDailyBriefScheduler,
   createEveningCloseoutScheduler,
+  createWeeklyStatsScheduler,
   reconcileDailyBriefSchedulers,
   reconcileEveningCloseoutSchedulers,
+  reconcileWeeklyStatsSchedulers,
   type DailyBriefJob,
   type DailyBriefSchedulerDeps,
   type EveningCloseoutJob,
+  type WeeklyStatsJob,
 } from './daily-loop/scheduler';
 import { runDailyBrief, type DailyBriefDeps } from './daily-loop/pipeline';
 import { runEveningCloseout, type EveningCloseoutDeps } from './daily-loop/closeout';
 import { handleCheckInAnswer, type CheckInAnswerDeps } from './daily-loop/checkin-answer';
+import { runWeeklyStats, type WeeklyStatsDeps } from './reviews/weekly-stats';
 
 const config = getConfig();
 
@@ -151,6 +157,15 @@ const closeoutQueue = new Queue<EveningCloseoutJob>(EVENING_CLOSEOUT_QUEUE, {
   connection: redisConnection,
 });
 const closeoutScheduler = createEveningCloseoutScheduler(closeoutQueue, closeoutSchedulerDeps);
+// Weekly stats: per linked athlete, one cron scheduler on Mondays at the local WEEKLY_STATS_TIME
+const weeklyStatsSchedulerDeps: DailyBriefSchedulerDeps = {
+  profiles: briefProfileRepo,
+  defaultTime: config.WEEKLY_STATS_TIME,
+};
+const weeklyStatsQueue = new Queue<WeeklyStatsJob>(WEEKLY_STATS_QUEUE, {
+  connection: redisConnection,
+});
+const weeklyStatsScheduler = createWeeklyStatsScheduler(weeklyStatsQueue, weeklyStatsSchedulerDeps);
 const checkInAnswerDeps: CheckInAnswerDeps = {
   runs: dailyBriefRunRepo,
   wellness: checkInRepo,
@@ -274,7 +289,8 @@ const icuConnectDeps: IcuConnectDeps = {
   scheduler: combineSchedulers(
     icuSyncScheduler,
     ...(config.DAILY_BRIEF_ENABLED ? [dailyBriefScheduler] : []),
-    ...(config.EVENING_CLOSEOUT_ENABLED ? [closeoutScheduler] : [])
+    ...(config.EVENING_CLOSEOUT_ENABLED ? [closeoutScheduler] : []),
+    ...(config.WEEKLY_STATS_ENABLED ? [weeklyStatsScheduler] : [])
   ),
   onSchedulerError: (error, userId) => {
     logger.error({ error, userId }, 'Failed to update intervals.icu sync schedule');
@@ -654,6 +670,33 @@ closeoutWorker?.on('error', (err) => {
   logger.error({ error: err }, 'Evening close-out worker error');
 });
 
+const weeklyStatsDeps: WeeklyStatsDeps = {
+  profiles: briefProfileRepo,
+  repo: weeklyStatsRepo,
+  logger,
+  now: () => new Date(),
+};
+
+const weeklyStatsWorker = config.WEEKLY_STATS_ENABLED
+  ? new Worker<WeeklyStatsJob>(
+      WEEKLY_STATS_QUEUE,
+      (job: Job<WeeklyStatsJob>) =>
+        runWeeklyStats(job.data.userId, weeklyStatsDeps, job.data.isoWeek),
+      { connection: redisConnection, concurrency: 2 }
+    )
+  : null;
+
+weeklyStatsWorker?.on('failed', (job, err) => {
+  logger.error(
+    { jobId: job?.id, userId: job?.data.userId, attempt: job?.attemptsMade, error: err },
+    'Weekly stats failed'
+  );
+});
+
+weeklyStatsWorker?.on('error', (err) => {
+  logger.error({ error: err }, 'Weekly stats worker error');
+});
+
 async function startIcuSync() {
   const userIds = await activityRepo.listConnectedUserIds();
   const result = await reconcileSchedulers(syncQueue, icuSyncScheduler, userIds, syncJobs);
@@ -674,6 +717,13 @@ async function startIcuSync() {
     closeoutSchedulerDeps
   );
   logger.info(closeout, 'Evening close-out schedules reconciled');
+  const weekly = await reconcileWeeklyStatsSchedulers(
+    weeklyStatsQueue,
+    weeklyStatsScheduler,
+    config.WEEKLY_STATS_ENABLED ? userIds : [],
+    weeklyStatsSchedulerDeps
+  );
+  logger.info(weekly, 'Weekly stats schedules reconciled');
 }
 
 startIcuSync().catch((error: unknown) => {
@@ -690,8 +740,14 @@ async function shutdown() {
     syncWorker.close(),
     briefWorker?.close(),
     closeoutWorker?.close(),
+    weeklyStatsWorker?.close(),
   ]);
-  await Promise.all([syncQueue.close(), briefQueue.close(), closeoutQueue.close()]);
+  await Promise.all([
+    syncQueue.close(),
+    briefQueue.close(),
+    closeoutQueue.close(),
+    weeklyStatsQueue.close(),
+  ]);
   redis.disconnect();
   await prisma.$disconnect();
   process.exit(0);

@@ -24,6 +24,7 @@ model User {
   coachChatMessages CoachChatMessage[]
   dailyBriefRuns    DailyBriefRun[]
   eveningCloseoutRuns EveningCloseoutRun[]
+  weeklyStats       WeeklyStats[]
 
   @@index([telegramId])
 }
@@ -449,4 +450,21 @@ model EveningCloseoutRun {
   updatedAt    DateTime              @updatedAt
 
   @@unique([userId, date])
+}
+
+// Planned vs actual per athlete and ISO week (core reviews/weekly-stats.ts, worker weekly-stats job)
+model WeeklyStats {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isoWeek       String // e.g. 2026-W40 (ISO week-numbering year)
+  weekStart     String // YYYY-MM-DD, Monday
+  weekEnd       String // YYYY-MM-DD, Sunday
+  unplannedWeek Boolean // no planned sessions: compliance is null
+  stats         Json // core WeeklyStats (versioned)
+  computedAt    DateTime
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([userId, isoWeek])
 }

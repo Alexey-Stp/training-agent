@@ -51,6 +51,7 @@ import type {
   EveningCloseoutRunRepo,
 } from './daily-loop/closeout-store';
 import type { CheckInRepo } from './daily-loop/checkin';
+import type { WeeklyStatsRepo } from './reviews/weekly-stats-store';
 import {
   WELLNESS_DEVICE_FIELDS,
   type WellnessDeviceField,
@@ -1081,5 +1082,77 @@ export const closeoutRepo: CloseoutRepo = {
           })
         ),
     ]);
+  },
+};
+
+export const weeklyStatsRepo: WeeklyStatsRepo = {
+  async loadRange(userId, { from, to }) {
+    const [sessions, activities, wellness, profile] = await Promise.all([
+      prisma.plannedSession.findMany({
+        where: { userId, date: { gte: from, lte: to } },
+        select: {
+          date: true,
+          slot: true,
+          sport: true,
+          title: true,
+          durationMin: true,
+          intensity: true,
+          status: true,
+          deletedAt: true,
+        },
+      }),
+      prisma.activity.findMany({
+        where: { userId, startDateLocal: { gte: from, lte: to } },
+        select: {
+          startDateLocal: true,
+          sport: true,
+          durationSec: true,
+          distanceM: true,
+          load: true,
+          avgHr: true,
+        },
+      }),
+      prisma.wellness.findMany({
+        where: { userId, date: { gte: from, lte: to } },
+        select: {
+          date: true,
+          hrv: true,
+          restingHr: true,
+          sleepHours: true,
+          ctl: true,
+          atl: true,
+          tsb: true,
+          subjectiveReadiness: true,
+          soreness: true,
+        },
+      }),
+      prisma.profile.findUnique({ where: { userId }, select: { lthr: true } }),
+    ]);
+    return {
+      sessions: sessions.map(({ deletedAt, ...row }) => ({
+        ...row,
+        sport: row.sport as Sport,
+        intensity: row.intensity as Intensity,
+        deleted: deletedAt !== null,
+      })),
+      activities: activities.map((row) => ({ ...row, sport: row.sport as Sport })),
+      wellness,
+      lthr: profile?.lthr ?? null,
+    };
+  },
+
+  async upsert(userId, stats, computedAt) {
+    const data = {
+      weekStart: stats.from,
+      weekEnd: stats.to,
+      unplannedWeek: stats.unplannedWeek,
+      stats: toJson(stats),
+      computedAt,
+    };
+    await prisma.weeklyStats.upsert({
+      where: { userId_isoWeek: { userId, isoWeek: stats.isoWeek } },
+      create: { userId, isoWeek: stats.isoWeek, ...data },
+      update: data,
+    });
   },
 };

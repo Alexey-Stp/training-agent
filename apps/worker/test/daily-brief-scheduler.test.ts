@@ -6,10 +6,13 @@ import {
   createCheckInContinuation,
   createDailyBriefScheduler,
   createEveningCloseoutScheduler,
+  createWeeklyStatsScheduler,
   dailyBriefSchedulerId,
   eveningCloseoutSchedulerId,
   reconcileDailyBriefSchedulers,
   reconcileEveningCloseoutSchedulers,
+  reconcileWeeklyStatsSchedulers,
+  weeklyCron,
   type BriefProfile,
   type DailyBriefSchedulerDeps,
 } from '../src/daily-loop/scheduler';
@@ -356,6 +359,68 @@ describe('reconcileEveningCloseoutSchedulers', () => {
 
     expect(result).toEqual({ scheduled: 1, removed: 1 });
     expect(scheduler.schedule).toHaveBeenCalledWith('new');
+    expect(scheduler.unschedule).toHaveBeenCalledTimes(1);
+    expect(scheduler.unschedule).toHaveBeenCalledWith('gone');
+  });
+});
+
+describe('weeklyCron', () => {
+  it('fires on Mondays at the given wall-clock time', () => {
+    expect(weeklyCron('06:00')).toBe('0 6 * * 1');
+    expect(weeklyCron('21:45')).toBe('45 21 * * 1');
+  });
+});
+
+describe('createWeeklyStatsScheduler', () => {
+  it('upserts a Monday cron at WEEKLY_STATS_TIME in the athlete timezone', async () => {
+    const queue = fakeQueue();
+    const profile: BriefProfile = { ...PRAGUE, briefTime: '05:45', closeoutTime: '21:15' };
+    const scheduler = createWeeklyStatsScheduler(
+      queue as unknown as SchedulerQueue,
+      schedulerDeps({ u1: profile }, '06:00')
+    );
+
+    await scheduler.schedule('u1');
+
+    expect(queue.upsertJobScheduler).toHaveBeenCalledWith(
+      'weekly-stats:u1',
+      { pattern: '0 6 * * 1', tz: 'Europe/Prague' },
+      expect.objectContaining({ name: 'weekly-stats', data: { userId: 'u1' } })
+    );
+  });
+
+  it('removes the scheduler on unschedule', async () => {
+    const queue = fakeQueue();
+    const scheduler = createWeeklyStatsScheduler(
+      queue as unknown as SchedulerQueue,
+      schedulerDeps({}, '06:00')
+    );
+
+    await scheduler.unschedule('u1');
+
+    expect(queue.removeJobScheduler).toHaveBeenCalledWith('weekly-stats:u1');
+  });
+});
+
+describe('reconcileWeeklyStatsSchedulers', () => {
+  it('reschedules a changed time and removes only weekly-stats orphans', async () => {
+    const queue = fakeQueue([
+      { key: 'weekly-stats:ok', pattern: '0 6 * * 1', tz: 'Europe/Prague' },
+      { key: 'weekly-stats:moved', pattern: '0 7 * * 1', tz: 'Europe/Prague' },
+      { key: 'weekly-stats:gone', pattern: '0 6 * * 1', tz: 'Europe/Prague' },
+      { key: 'evening-closeout:gone', pattern: '30 20 * * *', tz: 'Europe/Prague' },
+    ]);
+    const scheduler = fakeScheduler();
+
+    const result = await reconcileWeeklyStatsSchedulers(
+      queue as unknown as SchedulerQueue,
+      scheduler,
+      ['ok', 'moved'],
+      schedulerDeps({ ok: PRAGUE, moved: PRAGUE }, '06:00')
+    );
+
+    expect(result).toEqual({ scheduled: 1, removed: 1 });
+    expect(scheduler.schedule).toHaveBeenCalledWith('moved');
     expect(scheduler.unschedule).toHaveBeenCalledTimes(1);
     expect(scheduler.unschedule).toHaveBeenCalledWith('gone');
   });
