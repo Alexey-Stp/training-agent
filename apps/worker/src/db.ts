@@ -4,6 +4,7 @@ import {
   type EveningCloseoutRun as EveningCloseoutRunRow,
   type PlannedSession,
   type Prisma,
+  type WeeklyReviewRun as WeeklyReviewRunRow,
 } from '@prisma/client';
 import {
   Intensity,
@@ -52,6 +53,7 @@ import type {
 } from './daily-loop/closeout-store';
 import type { CheckInRepo } from './daily-loop/checkin';
 import type { WeeklyStatsRepo } from './reviews/weekly-stats-store';
+import type { WeeklyReviewRun, WeeklyReviewRunRepo } from './reviews/weekly-review-store';
 import {
   WELLNESS_DEVICE_FIELDS,
   type WellnessDeviceField,
@@ -710,6 +712,7 @@ export const coachAnswerRepo: CoachAnswerRepo = {
       select: {
         id: true,
         origin: true,
+        date: true,
         finalAction: true,
         finalChanges: true,
         athleteMessage: true,
@@ -721,6 +724,7 @@ export const coachAnswerRepo: CoachAnswerRepo = {
       ? {
           id: row.id,
           origin: row.origin,
+          date: row.date,
           finalAction: row.finalAction,
           finalChanges: row.finalChanges as unknown as SessionDiff[],
           athleteMessage: row.athleteMessage,
@@ -790,9 +794,16 @@ export const coachAnswerRepo: CoachAnswerRepo = {
     });
   },
 
-  async findBriefText(userId, decisionId) {
+  async findAnswerText(userId, { id, origin }) {
+    if (origin === 'weekly') {
+      const review = await prisma.weeklyReviewRun.findFirst({
+        where: { userId, coachDecisionId: id },
+        select: { reportText: true },
+      });
+      return review?.reportText ?? null;
+    }
     const run = await prisma.dailyBriefRun.findFirst({
-      where: { userId, coachDecisionId: decisionId },
+      where: { userId, coachDecisionId: id },
       select: { briefText: true },
     });
     return run?.briefText ?? null;
@@ -1153,6 +1164,68 @@ export const weeklyStatsRepo: WeeklyStatsRepo = {
       where: { userId_isoWeek: { userId, isoWeek: stats.isoWeek } },
       create: { userId, isoWeek: stats.isoWeek, ...data },
       update: data,
+    });
+  },
+};
+
+function toWeeklyReviewRun(row: WeeklyReviewRunRow): WeeklyReviewRun {
+  return {
+    id: row.id,
+    status: row.status,
+    coachDecisionId: row.coachDecisionId,
+    reportText: row.reportText,
+    reportKeyboard: row.reportKeyboard as InlineButton[][] | null,
+    stageTimings: row.stageTimings as StageTimings,
+  };
+}
+
+export const weeklyReviewRunRepo: WeeklyReviewRunRepo = {
+  async claim(userId, isoWeek, now, leaseMs) {
+    // skipDuplicates: the (userId, isoWeek) row may exist from an earlier trigger or attempt
+    await prisma.weeklyReviewRun.createMany({ data: [{ userId, isoWeek }], skipDuplicates: true });
+    // One conditional update takes the run over, so two concurrent triggers can't both win
+    const { count } = await prisma.weeklyReviewRun.updateMany({
+      where: {
+        userId,
+        isoWeek,
+        OR: [
+          { status: { in: ['pending', 'failed'] } },
+          { status: 'running', startedAt: { lt: new Date(now.getTime() - leaseMs) } },
+        ],
+      },
+      data: { status: 'running', startedAt: now, error: null },
+    });
+    const row = await prisma.weeklyReviewRun.findUniqueOrThrow({
+      where: { userId_isoWeek: { userId, isoWeek } },
+    });
+    if (count > 0) return { status: 'claimed', run: toWeeklyReviewRun(row) };
+    return { status: row.status === 'running' ? 'in_progress' : 'already_sent' };
+  },
+
+  async saveReport(id, report) {
+    await prisma.weeklyReviewRun.update({
+      where: { id },
+      data: {
+        coachDecisionId: report.coachDecisionId,
+        reportText: report.reportText,
+        reportKeyboard: toJson(report.reportKeyboard),
+        stale: report.stale,
+        stageTimings: toJson(report.stageTimings),
+      },
+    });
+  },
+
+  async markSent(id, sentAt, stageTimings) {
+    await prisma.weeklyReviewRun.update({
+      where: { id },
+      data: { status: 'sent', sentAt, error: null, stageTimings: toJson(stageTimings) },
+    });
+  },
+
+  async markFailed(id, error, stageTimings) {
+    await prisma.weeklyReviewRun.update({
+      where: { id },
+      data: { status: 'failed', error, stageTimings: toJson(stageTimings) },
     });
   },
 };

@@ -6,11 +6,13 @@ import {
   createCheckInContinuation,
   createDailyBriefScheduler,
   createEveningCloseoutScheduler,
+  createWeeklyReviewScheduler,
   createWeeklyStatsScheduler,
   dailyBriefSchedulerId,
   eveningCloseoutSchedulerId,
   reconcileDailyBriefSchedulers,
   reconcileEveningCloseoutSchedulers,
+  reconcileWeeklyReviewSchedulers,
   reconcileWeeklyStatsSchedulers,
   weeklyCron,
   type BriefProfile,
@@ -368,6 +370,64 @@ describe('weeklyCron', () => {
   it('fires on Mondays at the given wall-clock time', () => {
     expect(weeklyCron('06:00')).toBe('0 6 * * 1');
     expect(weeklyCron('21:45')).toBe('45 21 * * 1');
+  });
+
+  it('fires on another weekday when given one', () => {
+    expect(weeklyCron('19:00', 0)).toBe('0 19 * * 0');
+  });
+});
+
+describe('createWeeklyReviewScheduler', () => {
+  it('upserts a Sunday cron at WEEKLY_REVIEW_TIME in the athlete timezone', async () => {
+    const queue = fakeQueue();
+    const scheduler = createWeeklyReviewScheduler(
+      queue as unknown as SchedulerQueue,
+      schedulerDeps({ u1: PRAGUE }, '19:00')
+    );
+
+    await scheduler.schedule('u1');
+
+    expect(queue.upsertJobScheduler).toHaveBeenCalledWith(
+      'weekly-review:u1',
+      { pattern: '0 19 * * 0', tz: 'Europe/Prague' },
+      expect.objectContaining({ name: 'weekly-review', data: { userId: 'u1' } })
+    );
+  });
+
+  it('removes the scheduler on unschedule', async () => {
+    const queue = fakeQueue();
+    const scheduler = createWeeklyReviewScheduler(
+      queue as unknown as SchedulerQueue,
+      schedulerDeps({}, '19:00')
+    );
+
+    await scheduler.unschedule('u1');
+
+    expect(queue.removeJobScheduler).toHaveBeenCalledWith('weekly-review:u1');
+  });
+});
+
+describe('reconcileWeeklyReviewSchedulers', () => {
+  it('reschedules a changed time and leaves the weekly stats schedulers alone', async () => {
+    const queue = fakeQueue([
+      { key: 'weekly-review:ok', pattern: '0 19 * * 0', tz: 'Europe/Prague' },
+      { key: 'weekly-review:moved', pattern: '0 19 * * 1', tz: 'Europe/Prague' },
+      { key: 'weekly-review:gone', pattern: '0 19 * * 0', tz: 'Europe/Prague' },
+      { key: 'weekly-stats:gone', pattern: '0 6 * * 1', tz: 'Europe/Prague' },
+    ]);
+    const scheduler = fakeScheduler();
+
+    const result = await reconcileWeeklyReviewSchedulers(
+      queue as unknown as SchedulerQueue,
+      scheduler,
+      ['ok', 'moved'],
+      schedulerDeps({ ok: PRAGUE, moved: PRAGUE }, '19:00')
+    );
+
+    expect(result).toEqual({ scheduled: 1, removed: 1 });
+    expect(scheduler.schedule).toHaveBeenCalledWith('moved');
+    expect(scheduler.unschedule).toHaveBeenCalledTimes(1);
+    expect(scheduler.unschedule).toHaveBeenCalledWith('gone');
   });
 });
 

@@ -25,3 +25,8 @@ export function isoWeekRange(key: string): DateRange {
 export function previousIsoWeek(date: string): string {
   return isoWeekKey(addDaysIso(date, -7));
 }
+
+/** The ISO week after the one that contains `date`. */
+export function nextIsoWeek(date: string): string {
+  return isoWeekKey(addDaysIso(date, 7));
+}

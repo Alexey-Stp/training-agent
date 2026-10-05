@@ -1,0 +1,26 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`runWeeklyReviewJob: compliant week > sends a positive report without changes 1`] = `
+"📊 <b>Week 40 review</b>
+Every session done: 600 of 600 min, 117.5 km.
+🏊 Swim 120/120 min ✓ · 5.0 km
+🚴 Bike 255/255 min ✓ · 127.5 km
+🏃 Run 225/225 min ✓ · 37.5 km
+🔑 Key 4/4
+✅ Long ride and long run both complete
+✅ All key sessions hit
+No changes to next week."
+`;
+
+exports[`runWeeklyReviewJob: missed long ride > quantifies the gap and offers a rules-compliant partial catch-up 1`] = `
+"📊 <b>Week 40 review</b>
+Strong run week, but the 180-min long ride was missed: 420 of 600 min.
+🏊 Swim 120/120 min ✓ · 5.0 km
+🚴 Bike 75/255 min (−180) · 37.5 km
+🏃 Run 225/225 min ✓ · 37.5 km
+🔑 Key 3/4 · missed Long ride
+✅ All three runs done, 37.5 km
+⚠️ Bike 180 min short of plan
+<b>Next week</b>
+• Bike Long ride 210′→255′"
+`;

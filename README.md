@@ -338,6 +338,33 @@ Every Monday at `WEEKLY_STATS_TIME` (06:00) in the athlete's timezone, the worke
 
 A rerun replaces the week's row. Set `WEEKLY_STATS_ENABLED=false` to turn it off.
 
+### Weekly review
+
+Every Sunday at `WEEKLY_REVIEW_TIME` (19:00) in the athlete's timezone, the coach reviews the week that ends that day and proposes changes to next week:
+
+```
+📊 Week 40 review · Build 1/4
+Strong run week, but the 180-min long ride was missed: 420 of 600 min.
+🏊 Swim 120/120 min ✓ · 5.0 km
+🚴 Bike 75/255 min (−180) · 37.5 km
+🏃 Run 225/225 min ✓ · 37.5 km
+🔑 Key 3/4 · missed Long ride
+✅ All three runs done, 37.5 km
+⚠️ Bike 180 min short of plan
+Next week
+• Bike Long ride 210′→255′
+[✅ Apply next week] [➡️ Keep plan]
+[💬 Discuss]
+```
+
+- **Data.** The worker syncs activities, recomputes this week's stats (Monday's weekly stats run later replaces them with the final numbers) and reads next week's planned sessions and the season position. Today's sessions may still be open, so they count as pending.
+- **Next-week changes.** The coach may change single sessions (duration, intensity, date, sport) or scale the whole week (`scale_volume`, factor 0.6–1.08). Missed training is never crammed in: all changes together may add at most `WEEKLY_REVIEW_MAX_RAMP_PCT` (8%) to next week's planned minutes. The usual guardrails also apply: at most 50% off a session, no moves onto rest days, no hard sessions back to back, the weekly load cap, and no changes to sessions you edited in intervals.icu.
+- **Rejected changes.** If the coach's changes break a limit, the report keeps the coach's words, says so, and falls back to the standard safety rules. Without the LLM, the report is built from the stats alone.
+- **Apply next week** updates next week's sessions and pushes them to intervals.icu, the same way the morning brief's Apply does, and edits the report with the result. The button expires after `COACH_DECISION_TTL_HOURS` (24 h).
+- **One per week** (`WeeklyReviewRun`). If intervals.icu is down, the report goes out with a note that activities may be missing. A failed send is retried with the stored report.
+
+Set `WEEKLY_REVIEW_ENABLED=false` to turn it off.
+
 ## intervals.icu Integration
 
 `packages/integrations-icu` (`@triathlon/integrations-icu`) is a typed REST client for [intervals.icu](https://intervals.icu). The worker uses it to validate credentials in `/connect icu` and to sync activities and wellness.

@@ -60,6 +60,14 @@ const envSchema = z.object({
     .default('true')
     .transform((v) => v === 'true'),
   WEEKLY_STATS_TIME: z.string().regex(BRIEF_TIME_RE, 'must be HH:mm (24h)').default('06:00'),
+  // Weekly review: every Sunday at this local time, an AI review of the week with next-week changes
+  WEEKLY_REVIEW_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  WEEKLY_REVIEW_TIME: z.string().regex(BRIEF_TIME_RE, 'must be HH:mm (24h)').default('19:00'),
+  // Next-week changes may add at most this % to next week's planned minutes (catch-up ramp cap)
+  WEEKLY_REVIEW_MAX_RAMP_PCT: z.coerce.number().min(0).max(50).default(8),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

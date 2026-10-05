@@ -25,6 +25,7 @@ model User {
   dailyBriefRuns    DailyBriefRun[]
   eveningCloseoutRuns EveningCloseoutRun[]
   weeklyStats       WeeklyStats[]
+  weeklyReviewRuns  WeeklyReviewRun[]
 
   @@index([telegramId])
 }
@@ -330,11 +331,13 @@ enum CoachAction {
   swap
   move
   rest
+  adjust // weekly review: changes that add minutes, or mix cuts and additions
 }
 
 enum CoachDecisionOrigin {
   daily
   chat
+  weekly
 }
 
 enum CoachUserAction {
@@ -343,8 +346,8 @@ enum CoachUserAction {
   discuss
 }
 
-// One row per daily coaching run, whatever its outcome (packages/ai suggestion/run.ts), and one
-// per coach-chat suggestion (packages/ai chat/run.ts)
+// One row per daily coaching run, whatever its outcome (packages/ai suggestion/run.ts), one per
+// coach-chat suggestion (packages/ai chat/run.ts) and one per weekly review (packages/ai weekly/run.ts)
 model CoachDecision {
   id                      String              @id @default(cuid())
   userId                  String
@@ -467,4 +470,33 @@ model WeeklyStats {
   updatedAt     DateTime @updatedAt
 
   @@unique([userId, isoWeek])
+}
+
+enum WeeklyReviewStatus {
+  pending
+  running
+  sent
+  failed
+}
+
+// One Sunday weekly review per athlete and ISO week (apps/worker reviews/weekly-review.ts)
+model WeeklyReviewRun {
+  id              String             @id @default(cuid())
+  userId          String
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isoWeek         String // the reviewed week, e.g. 2026-W40
+  status          WeeklyReviewStatus @default(pending)
+  startedAt       DateTime? // lease of the run in progress
+  coachDecisionId String?
+  reportText      String? // rendered report (Telegram HTML); a retry resends it
+  reportKeyboard  Json? // InlineButton[][] sent with the report
+  stale           Boolean            @default(false) // the activity sync failed
+  stageTimings    Json               @default("{}") // stage → ms
+  error           String?
+  sentAt          DateTime?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@unique([userId, isoWeek])
+  @@index([coachDecisionId])
 }

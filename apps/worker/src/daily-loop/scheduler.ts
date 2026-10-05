@@ -30,6 +30,17 @@ export function eveningCloseoutSchedulerId(userId: string): string {
 export const WEEKLY_STATS_QUEUE = 'weekly-stats';
 export const WEEKLY_STATS_JOB = 'weekly-stats';
 
+export const WEEKLY_REVIEW_QUEUE = 'weekly-review';
+export const WEEKLY_REVIEW_JOB = 'weekly-review';
+
+/** Cron day-of-week numbers */
+export const MONDAY = 1;
+export const SUNDAY = 0;
+
+export interface WeeklyReviewJob {
+  userId: string;
+}
+
 export interface WeeklyStatsJob {
   userId: string;
   /** ISO week to compute (`2026-W40`); the scheduler leaves it out: the previous week */
@@ -53,7 +64,7 @@ export interface BriefProfileRepo {
 
 export interface DailyBriefSchedulerDeps {
   profiles: BriefProfileRepo;
-  /** DAILY_BRIEF_DEFAULT_TIME, EVENING_CLOSEOUT_DEFAULT_TIME, or WEEKLY_STATS_TIME */
+  /** DAILY_BRIEF_DEFAULT_TIME, EVENING_CLOSEOUT_DEFAULT_TIME, WEEKLY_STATS_TIME or WEEKLY_REVIEW_TIME */
   defaultTime: string;
 }
 
@@ -64,9 +75,9 @@ export function briefCron(briefTime: string): string {
 }
 
 /** `'06:00'` → `'0 6 * * 1'`: every Monday at that wall-clock time. */
-export function weeklyCron(time: string): string {
+export function weeklyCron(time: string, weekday: number = MONDAY): string {
   const [hours, minutes] = time.split(':').map(Number);
-  return [minutes, hours, '*', '*', '1'].join(' ');
+  return [minutes, hours, '*', '*', weekday].join(' ');
 }
 
 function repeatAt(time: string, timezone: string): { pattern: string; tz: string } {
@@ -95,6 +106,14 @@ export function weeklyStatsRepeat(
   time: string
 ): { pattern: string; tz: string } {
   return { pattern: weeklyCron(time), tz: profile.timezone };
+}
+
+/** The repeat options of an athlete's weekly review scheduler: Sundays at WEEKLY_REVIEW_TIME. */
+export function weeklyReviewRepeat(
+  profile: BriefProfile,
+  time: string
+): { pattern: string; tz: string } {
+  return { pattern: weeklyCron(time, SUNDAY), tz: profile.timezone };
 }
 
 /** Job data every daily cron job carries */
@@ -129,6 +148,11 @@ const BRIEF_SPEC: DailyCronSpec = { jobName: DAILY_BRIEF_JOB, repeat: briefRepea
 const CLOSEOUT_SPEC: DailyCronSpec = { jobName: EVENING_CLOSEOUT_JOB, repeat: closeoutRepeat };
 
 const WEEKLY_STATS_SPEC: DailyCronSpec = { jobName: WEEKLY_STATS_JOB, repeat: weeklyStatsRepeat };
+
+const WEEKLY_REVIEW_SPEC: DailyCronSpec = {
+  jobName: WEEKLY_REVIEW_JOB,
+  repeat: weeklyReviewRepeat,
+};
 
 function schedulerId(spec: { jobName: string }, userId: string): string {
   return spec.jobName + ':' + userId;
@@ -182,6 +206,14 @@ export function createWeeklyStatsScheduler(
   deps: DailyBriefSchedulerDeps
 ): IcuSyncScheduler {
   return createDailyCronScheduler(queue, WEEKLY_STATS_SPEC, deps);
+}
+
+/** The weekly review scheduler: `weekly-review:<userId>` on Sundays at the local WEEKLY_REVIEW_TIME. */
+export function createWeeklyReviewScheduler(
+  queue: CronQueue,
+  deps: DailyBriefSchedulerDeps
+): IcuSyncScheduler {
+  return createDailyCronScheduler(queue, WEEKLY_REVIEW_SPEC, deps);
 }
 
 /** BullMQ rejects `:` in custom job ids, hence the dashes. */
@@ -306,4 +338,14 @@ export function reconcileWeeklyStatsSchedulers(
   deps: DailyBriefSchedulerDeps
 ): Promise<{ scheduled: number; removed: number }> {
   return reconcileDailyCronSchedulers(queue, WEEKLY_STATS_SPEC, scheduler, connectedUserIds, deps);
+}
+
+/** Startup reconcile of the weekly review schedulers. */
+export function reconcileWeeklyReviewSchedulers(
+  queue: CronQueue,
+  scheduler: IcuSyncScheduler,
+  connectedUserIds: string[],
+  deps: DailyBriefSchedulerDeps
+): Promise<{ scheduled: number; removed: number }> {
+  return reconcileDailyCronSchedulers(queue, WEEKLY_REVIEW_SPEC, scheduler, connectedUserIds, deps);
 }

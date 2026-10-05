@@ -16,7 +16,13 @@ import {
 } from '@triathlon/core';
 import type { CoachAnswer, CommandJob, IcuSyncJob } from '@triathlon/core';
 import { IcuClient } from '@triathlon/integrations-icu';
-import { createLlmProvider, loadAiConfig, withCallLog } from '@triathlon/ai';
+import {
+  createLlmProvider,
+  DEFAULT_WEEKLY_GUARDRAIL_CONFIG,
+  loadAiConfig,
+  withCallLog,
+  type WeeklyGuardrailConfig,
+} from '@triathlon/ai';
 import { logger } from './logger';
 import {
   prisma,
@@ -42,6 +48,7 @@ import {
   eveningCloseoutRunRepo,
   checkInRepo,
   weeklyStatsRepo,
+  weeklyReviewRunRepo,
 } from './db';
 import {
   handleStart,
@@ -95,23 +102,28 @@ import {
   DAILY_BRIEF_QUEUE,
   EVENING_CLOSEOUT_QUEUE,
   WEEKLY_STATS_QUEUE,
+  WEEKLY_REVIEW_QUEUE,
   combineSchedulers,
   createCheckInContinuation,
   createDailyBriefScheduler,
   createEveningCloseoutScheduler,
   createWeeklyStatsScheduler,
+  createWeeklyReviewScheduler,
   reconcileDailyBriefSchedulers,
   reconcileEveningCloseoutSchedulers,
   reconcileWeeklyStatsSchedulers,
+  reconcileWeeklyReviewSchedulers,
   type DailyBriefJob,
   type DailyBriefSchedulerDeps,
   type EveningCloseoutJob,
   type WeeklyStatsJob,
+  type WeeklyReviewJob,
 } from './daily-loop/scheduler';
 import { runDailyBrief, type DailyBriefDeps } from './daily-loop/pipeline';
 import { runEveningCloseout, type EveningCloseoutDeps } from './daily-loop/closeout';
 import { handleCheckInAnswer, type CheckInAnswerDeps } from './daily-loop/checkin-answer';
 import { runWeeklyStats, type WeeklyStatsDeps } from './reviews/weekly-stats';
+import { runWeeklyReviewJob, type WeeklyReviewDeps } from './reviews/weekly-review';
 
 const config = getConfig();
 
@@ -166,6 +178,22 @@ const weeklyStatsQueue = new Queue<WeeklyStatsJob>(WEEKLY_STATS_QUEUE, {
   connection: redisConnection,
 });
 const weeklyStatsScheduler = createWeeklyStatsScheduler(weeklyStatsQueue, weeklyStatsSchedulerDeps);
+// Weekly review: per linked athlete, one cron scheduler on Sundays at the local WEEKLY_REVIEW_TIME
+const weeklyReviewSchedulerDeps: DailyBriefSchedulerDeps = {
+  profiles: briefProfileRepo,
+  defaultTime: config.WEEKLY_REVIEW_TIME,
+};
+const weeklyReviewQueue = new Queue<WeeklyReviewJob>(WEEKLY_REVIEW_QUEUE, {
+  connection: redisConnection,
+});
+const weeklyReviewScheduler = createWeeklyReviewScheduler(
+  weeklyReviewQueue,
+  weeklyReviewSchedulerDeps
+);
+const weeklyGuardrailConfig: WeeklyGuardrailConfig = {
+  ...DEFAULT_WEEKLY_GUARDRAIL_CONFIG,
+  maxRamp: config.WEEKLY_REVIEW_MAX_RAMP_PCT / 100,
+};
 const checkInAnswerDeps: CheckInAnswerDeps = {
   runs: dailyBriefRunRepo,
   wellness: checkInRepo,
@@ -278,6 +306,7 @@ const coachAnswerDeps: CoachAnswerDeps = {
   onPushError: (error, userId) => {
     logger.error({ error, userId }, 'Failed to push applied coach changes');
   },
+  weeklyGuardrailConfig,
   ttlHours: config.COACH_DECISION_TTL_HOURS,
   now: () => new Date(),
 };
@@ -290,7 +319,8 @@ const icuConnectDeps: IcuConnectDeps = {
     icuSyncScheduler,
     ...(config.DAILY_BRIEF_ENABLED ? [dailyBriefScheduler] : []),
     ...(config.EVENING_CLOSEOUT_ENABLED ? [closeoutScheduler] : []),
-    ...(config.WEEKLY_STATS_ENABLED ? [weeklyStatsScheduler] : [])
+    ...(config.WEEKLY_STATS_ENABLED ? [weeklyStatsScheduler] : []),
+    ...(config.WEEKLY_REVIEW_ENABLED ? [weeklyReviewScheduler] : [])
   ),
   onSchedulerError: (error, userId) => {
     logger.error({ error, userId }, 'Failed to update intervals.icu sync schedule');
@@ -697,6 +727,41 @@ weeklyStatsWorker?.on('error', (err) => {
   logger.error({ error: err }, 'Weekly stats worker error');
 });
 
+const weeklyReviewDeps: WeeklyReviewDeps = {
+  runs: weeklyReviewRunRepo,
+  profiles: briefProfileRepo,
+  stats: weeklyStatsRepo,
+  seasons: seasonRepo,
+  planned: plannedSessionRepo,
+  syncActivities: (userId) => syncActivities(userId, activitySyncDeps),
+  getRulesContext,
+  provider: llmProvider,
+  decisions: coachDecisionRepo,
+  guardrailConfig: weeklyGuardrailConfig,
+  sendMessage: (chatId, text, options) => api.sendMessage(chatId, text, options),
+  logger,
+  now: () => new Date(),
+};
+
+const weeklyReviewWorker = config.WEEKLY_REVIEW_ENABLED
+  ? new Worker<WeeklyReviewJob>(
+      WEEKLY_REVIEW_QUEUE,
+      (job: Job<WeeklyReviewJob>) => runWeeklyReviewJob(job.data.userId, weeklyReviewDeps),
+      { connection: redisConnection, concurrency: 2 }
+    )
+  : null;
+
+weeklyReviewWorker?.on('failed', (job, err) => {
+  logger.error(
+    { jobId: job?.id, userId: job?.data.userId, attempt: job?.attemptsMade, error: err },
+    'Weekly review failed'
+  );
+});
+
+weeklyReviewWorker?.on('error', (err) => {
+  logger.error({ error: err }, 'Weekly review worker error');
+});
+
 async function startIcuSync() {
   const userIds = await activityRepo.listConnectedUserIds();
   const result = await reconcileSchedulers(syncQueue, icuSyncScheduler, userIds, syncJobs);
@@ -724,6 +789,13 @@ async function startIcuSync() {
     weeklyStatsSchedulerDeps
   );
   logger.info(weekly, 'Weekly stats schedules reconciled');
+  const review = await reconcileWeeklyReviewSchedulers(
+    weeklyReviewQueue,
+    weeklyReviewScheduler,
+    config.WEEKLY_REVIEW_ENABLED ? userIds : [],
+    weeklyReviewSchedulerDeps
+  );
+  logger.info(review, 'Weekly review schedules reconciled');
 }
 
 startIcuSync().catch((error: unknown) => {
@@ -741,12 +813,14 @@ async function shutdown() {
     briefWorker?.close(),
     closeoutWorker?.close(),
     weeklyStatsWorker?.close(),
+    weeklyReviewWorker?.close(),
   ]);
   await Promise.all([
     syncQueue.close(),
     briefQueue.close(),
     closeoutQueue.close(),
     weeklyStatsQueue.close(),
+    weeklyReviewQueue.close(),
   ]);
   redis.disconnect();
   await prisma.$disconnect();
