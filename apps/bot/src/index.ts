@@ -1,21 +1,19 @@
 import 'dotenv/config';
-import { Bot, InlineKeyboard, type Context } from 'grammy';
+import { Bot } from 'grammy';
 import Redis from 'ioredis';
-import { COACH_CHAT_COMMAND, getConfig, getEncKeys, SEASON_PREVIEW_COMMAND } from '@triathlon/core';
+import { COACH_CHAT_COMMAND, getConfig, getEncKeys } from '@triathlon/core';
 import type { CommandJob } from '@triathlon/core';
 import { commandQueue, enqueueCommand } from './queue';
 import { logger } from './logger';
 import { parseCommand } from './parser';
 import { handleConnectDialog, RedisDialogStore } from './connect-dialog';
+import { handleSeasonDialog, RedisSeasonDialogStore } from './season-dialog';
 import {
-  handleSeasonDialog,
-  RedisSeasonDialogStore,
-  WIZARD_EXPIRED,
-  type KeyboardButton,
-  type SeasonDialogOutcome,
-} from './season-dialog';
-import { routeSeasonDecision, type DecisionJob } from './season-callbacks';
-import { routeCoachDecision } from './coach-callbacks';
+  enqueueSeasonPreview,
+  registerCallbackHandlers,
+  toInlineKeyboard,
+  type CallbackDeps,
+} from './callbacks';
 
 const config = getConfig();
 const [encKey] = getEncKeys(config);
@@ -26,37 +24,13 @@ const redis = new Redis({ host: config.REDIS_HOST, port: config.REDIS_PORT });
 const dialogStore = new RedisDialogStore(redis);
 const seasonDialogStore = new RedisSeasonDialogStore(redis);
 
-function toInlineKeyboard(rows: KeyboardButton[][] | undefined): InlineKeyboard | undefined {
-  return rows
-    ? InlineKeyboard.from(rows.map((row) => row.map((b) => InlineKeyboard.text(b.text, b.data))))
-    : undefined;
-}
-
-/** Callback jobs are keyed by the tapped message, so a double tap enqueues one job. */
-function callbackJobId(chatId: number, messageId: number): string {
-  return `cb-${chatId.toString()}-${messageId.toString()}`;
-}
-
-async function enqueueSeasonPreview(
-  chatId: number,
-  userId: number,
-  messageId: number,
-  args: string[],
-  jobId?: string
-): Promise<void> {
-  await enqueueCommand(
-    {
-      telegramChatId: chatId,
-      telegramUserId: userId,
-      messageId,
-      commandName: SEASON_PREVIEW_COMMAND,
-      args,
-      rawText: '',
-    },
-    { jobId }
-  );
-  logger.info({ userId, chatId, messageId, command: SEASON_PREVIEW_COMMAND }, 'Job enqueued');
-}
+const callbackDeps: CallbackDeps = {
+  enqueue: enqueueCommand,
+  seasonDialogStore,
+  ttlHours: config.COACH_DECISION_TTL_HOURS,
+  now: () => new Date(),
+  logger,
+};
 
 // Middleware to log all updates. Metadata only: message text may contain secrets
 // (e.g. an API key typed into the /connect icu dialog).
@@ -119,7 +93,7 @@ bot.on('message:text', async (ctx) => {
     }
 
     if (season.kind === 'submit') {
-      await enqueueSeasonPreview(chatId, userId, messageId, season.args);
+      await enqueueSeasonPreview(callbackDeps, { chatId, userId, messageId }, season.args);
       await ctx.reply(season.text);
       return;
     }
@@ -164,85 +138,7 @@ bot.on('message:text', async (ctx) => {
   }
 });
 
-/** Edits the tapped message; Telegram refuses an edit that changes nothing, which is fine. */
-async function editTapped(ctx: Context, text: string | null, keyboard?: KeyboardButton[][]) {
-  try {
-    const reply_markup = toInlineKeyboard(keyboard);
-    await (text === null
-      ? ctx.editMessageReplyMarkup({ reply_markup })
-      : ctx.editMessageText(text, { reply_markup }));
-  } catch (error) {
-    logger.warn({ error, userId: ctx.from?.id }, 'Could not edit tapped message');
-  }
-}
-
-/** Wizard button: next step in place of the wizard message, or the preview job. */
-async function applyWizardTap(ctx: Context, outcome: SeasonDialogOutcome, messageId: number) {
-  const userId = ctx.from?.id;
-  const chatId = ctx.chat?.id;
-  if (outcome.kind === 'reply') await editTapped(ctx, outcome.text, outcome.keyboard);
-  if (outcome.kind === 'submit' && userId !== undefined && chatId !== undefined) {
-    await editTapped(ctx, outcome.text);
-    await enqueueSeasonPreview(
-      chatId,
-      userId,
-      messageId,
-      outcome.args,
-      callbackJobId(chatId, messageId)
-    );
-  }
-  await ctx.answerCallbackQuery();
-}
-
-/** Decision button: drop the buttons so they can't be tapped again, then enqueue the decision. */
-async function applyDecisionTap(ctx: Context, job: DecisionJob, messageId: number) {
-  const userId = ctx.from?.id;
-  const chatId = ctx.chat?.id;
-  if (userId === undefined || chatId === undefined) return;
-  await editTapped(ctx, null);
-  await enqueueCommand(
-    {
-      telegramChatId: chatId,
-      telegramUserId: userId,
-      messageId,
-      commandName: job.commandName,
-      args: job.args,
-      rawText: '',
-    },
-    { jobId: callbackJobId(chatId, messageId) }
-  );
-  logger.info({ userId, chatId, messageId, command: job.commandName }, 'Job enqueued');
-  await ctx.answerCallbackQuery({ text: job.toast });
-}
-
-// Inline buttons: coach Apply/Keep, the season wizard steps and the season preview's confirm/cancel
-bot.on('callback_query:data', async (ctx) => {
-  try {
-    const { data, message } = ctx.callbackQuery;
-    if (!message) {
-      await ctx.answerCallbackQuery({ text: WIZARD_EXPIRED });
-      return;
-    }
-    const decision = routeCoachDecision(data) ?? routeSeasonDecision(data);
-    if (decision) {
-      await applyDecisionTap(ctx, decision, message.message_id);
-      return;
-    }
-    const outcome = await handleSeasonDialog(
-      ctx.from.id,
-      { kind: 'callback', data },
-      seasonDialogStore
-    );
-    await applyWizardTap(ctx, outcome, message.message_id);
-  } catch (error) {
-    logger.error({ error }, 'Error handling button');
-    try {
-      await ctx.answerCallbackQuery({ text: '❌ Sorry, something went wrong. Please try again.' });
-    } catch (answerError) {
-      logger.error({ error: answerError }, 'Failed to answer button');
-    }
-  }
-});
+registerCallbackHandlers(bot, callbackDeps);
 
 // Handle errors
 bot.catch((err) => {

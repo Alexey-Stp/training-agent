@@ -5,6 +5,7 @@ import Redis from 'ioredis';
 import {
   COACH_APPLY_COMMAND,
   COACH_CHAT_COMMAND,
+  COACH_DISCUSS_COMMAND,
   COACH_KEEP_COMMAND,
   getConfig,
   getEncKeys,
@@ -12,7 +13,7 @@ import {
   SEASON_CONFIRM_COMMAND,
   SEASON_PREVIEW_COMMAND,
 } from '@triathlon/core';
-import type { CommandJob, IcuSyncJob } from '@triathlon/core';
+import type { CoachAnswer, CommandJob, IcuSyncJob } from '@triathlon/core';
 import { IcuClient } from '@triathlon/integrations-icu';
 import { createLlmProvider, loadAiConfig, withCallLog } from '@triathlon/ai';
 import { logger } from './logger';
@@ -74,6 +75,7 @@ import { processPlanReconcileJob, type PlanReconcileDeps } from './plan-reconcil
 import { RedisChatLimiter } from './chat-limit';
 import { handleCoachChat, type CoachChatDeps } from './coach-chat-command';
 import { handleCoachAnswer, type CoachAnswerDeps } from './coach-apply';
+import { handlePlanToday } from './plan-today';
 import {
   ACTIVITY_SYNC_JOB,
   ICU_SYNC_QUEUE,
@@ -225,11 +227,13 @@ const coachChatDeps: CoachChatDeps = {
 
 const coachAnswerDeps: CoachAnswerDeps = {
   repo: coachAnswerRepo,
+  chats: coachChatRepo,
   getRulesContext,
   push: planPushCommandDeps.push,
   onPushError: (error, userId) => {
     logger.error({ error, userId }, 'Failed to push applied coach changes');
   },
+  ttlHours: config.COACH_DECISION_TTL_HOURS,
   now: () => new Date(),
 };
 
@@ -246,6 +250,41 @@ const icuConnectDeps: IcuConnectDeps = {
 };
 
 // Create worker
+type WorkerUser = Awaited<ReturnType<typeof ensureUser>>;
+
+/** `/plan`, `/plan today` and `/plan push` */
+function planCommand(user: WorkerUser, sub: string | undefined): Promise<Reply> {
+  if (sub === 'push') return handlePlanPushCommand(user, planPushCommandDeps, planSourceDeps);
+  if (sub === 'today') return handlePlanToday(user, planStoreDeps);
+  return handlePlan(user, planStoreDeps, planSourceDeps);
+}
+
+function coachAnswer(
+  user: WorkerUser,
+  decisionId: string | undefined,
+  answer: CoachAnswer,
+  telegramMessageId: number
+): Promise<Reply> {
+  return handleCoachAnswer(user, { decisionId, answer, telegramMessageId }, coachAnswerDeps);
+}
+
+/**
+ * Sends the reply, or replaces the tapped message with it (`editTapped`, e.g. a morning
+ * brief with the Apply result). A failed edit falls back to a new message.
+ */
+async function sendReply(chatId: number, messageId: number, reply: Reply): Promise<void> {
+  const message = toTelegramMessage(reply);
+  if (typeof reply !== 'string' && reply.editTapped) {
+    try {
+      await api.editMessageText(chatId, messageId, message.text, message.options);
+      return;
+    } catch (error) {
+      logger.warn({ error, chatId, messageId }, 'Could not edit the tapped message, sending');
+    }
+  }
+  await api.sendMessage(chatId, message.text, message.options);
+}
+
 const worker = new Worker<CommandJob>(
   'commands',
   async (job: Job<CommandJob>) => {
@@ -297,10 +336,7 @@ const worker = new Worker<CommandJob>(
           break;
 
         case 'plan':
-          response =
-            args[0]?.toLowerCase() === 'push'
-              ? await handlePlanPushCommand(user, planPushCommandDeps, planSourceDeps)
-              : await handlePlan(user, planStoreDeps, planSourceDeps);
+          response = await planCommand(user, args[0]?.toLowerCase());
           break;
 
         case 'week':
@@ -395,13 +431,17 @@ const worker = new Worker<CommandJob>(
           );
           break;
 
-        // Apply/Keep buttons under a coach-chat suggestion
+        // Apply / Keep plan / Discuss buttons under a morning brief or a coach-chat suggestion
         case COACH_APPLY_COMMAND:
-          response = await handleCoachAnswer(user, args[0], 'apply', coachAnswerDeps);
+          response = await coachAnswer(user, args[0], 'apply', messageId);
           break;
 
         case COACH_KEEP_COMMAND:
-          response = await handleCoachAnswer(user, args[0], 'keep', coachAnswerDeps);
+          response = await coachAnswer(user, args[0], 'keep', messageId);
+          break;
+
+        case COACH_DISCUSS_COMMAND:
+          response = await coachAnswer(user, args[0], 'discuss', messageId);
           break;
 
         case 'unknown':
@@ -410,9 +450,7 @@ const worker = new Worker<CommandJob>(
           break;
       }
 
-      // Send response via Telegram
-      const message = toTelegramMessage(response);
-      await api.sendMessage(telegramChatId, message.text, message.options);
+      await sendReply(telegramChatId, messageId, response);
 
       // Mark message as processed
       await markMessageProcessed(user.id, messageId);

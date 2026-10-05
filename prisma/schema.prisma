@@ -324,6 +324,12 @@ enum CoachDecisionOrigin {
   chat
 }
 
+enum CoachUserAction {
+  apply
+  keep
+  discuss
+}
+
 // One row per daily coaching run, whatever its outcome (packages/ai suggestion/run.ts), and one
 // per coach-chat suggestion (packages/ai chat/run.ts)
 model CoachDecision {
@@ -348,6 +354,7 @@ model CoachDecision {
   accepted                Boolean? // the athlete's answer; NULL until answered
   answeredAt              DateTime?
   origin                  CoachDecisionOrigin @default(daily)
+  userAction              CoachUserAction? // the button tapped; discuss doesn't answer the decision
   createdAt               DateTime            @default(now())
 
   @@index([userId, date])

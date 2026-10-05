@@ -51,3 +51,7 @@ SonarQube scans this repo, including `test/` directories, which ESLint ignores. 
   const lines = races.map((r) => '• ' + formatRace(r));
   return ['🏁 Upcoming races', '', ...lines].join('\n');
   ```
+
+## SQL (migrations)
+
+- **No comparisons against boolean literals.** Use the column itself: `WHERE "accepted"` and `WHERE NOT "accepted"`, not `= true` / `= false`. Both forms skip NULL rows, so the result is the same.

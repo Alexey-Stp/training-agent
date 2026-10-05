@@ -19,6 +19,7 @@ import {
 import { coachPlanWindow, toCoachPlanSession } from '../coach-plan';
 import type { IcuConnectionRecord } from '../icu-connect';
 import { toTelegramMessage, type RichReply, type TelegramMessageOptions } from '../reply';
+import { readinessVerdict } from './readiness';
 import { renderBrief } from './render';
 import type { DailyBriefRun, DailyBriefRunRepo, StageTimings } from './run-store';
 import type { BriefProfileRepo } from './scheduler';
@@ -213,7 +214,11 @@ async function prepareBrief(
     timezone,
     decision: record,
     decisionId: id,
-    todaySessions: inputs.planned.filter((s) => s.date === ctx.date),
+    planned: inputs.planned,
+    readiness: readinessVerdict(
+      inputs.rules.todayWellness,
+      inputs.daily?.context.wellness.hrv ?? null
+    ),
     stale,
     dataAsOf: asOf,
   });

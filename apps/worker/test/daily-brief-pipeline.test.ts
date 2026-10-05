@@ -282,11 +282,17 @@ describe('runDailyBrief', () => {
     expect(sentText()).toContain('VO2 5x4 (60min • Z4)');
     expect(sentText()).toContain(LLM_MESSAGE);
     expect(sentText()).not.toContain('intervals.icu unavailable');
-    expect(sendMessage.mock.calls[0][2]).toEqual({ parse_mode: 'HTML' });
+    expect(sentText()).toContain('⚪ No readiness data today');
+    // No changes: only Discuss
+    const options = sendMessage.mock.calls[0][2];
+    expect(options.parse_mode).toBe('HTML');
+    expect(
+      options.reply_markup?.inline_keyboard.flat().map((b) => parseCoachDecision(b.callback_data))
+    ).toEqual([{ answer: 'discuss', decisionId: 'dec1' }]);
     expect(runs.only()).toMatchObject({ status: 'sent', coachDecisionId: 'dec1', stale: false });
   });
 
-  it('adds Apply/Keep buttons when the coach changes the plan', async () => {
+  it('adds Apply/Keep plan buttons when the coach changes the plan', async () => {
     await runDailyBrief(
       USER_ID,
       deps({
@@ -296,10 +302,15 @@ describe('runDailyBrief', () => {
     );
 
     const keyboard = sendMessage.mock.calls[0][2].reply_markup?.inline_keyboard;
-    expect(keyboard?.[0].map((b) => parseCoachDecision(b.callback_data))).toEqual([
-      { answer: 'apply', decisionId: 'dec1' },
-      { answer: 'keep', decisionId: 'dec1' },
+    expect(keyboard?.map((row) => row.map((b) => parseCoachDecision(b.callback_data)))).toEqual([
+      [
+        { answer: 'apply', decisionId: 'dec1' },
+        { answer: 'keep', decisionId: 'dec1' },
+      ],
+      [{ answer: 'discuss', decisionId: 'dec1' }],
     ]);
+    expect(sentText()).toContain('🔴 Low readiness (2/5)');
+    expect(sentText()).toContain('<b>Proposed</b>');
   });
 
   describe('idempotency (one brief per athlete and local day)', () => {

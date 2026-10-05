@@ -125,16 +125,23 @@ export function isNotFound(error: unknown): boolean {
  * events for new sessions, updates the stored event for changed ones and deletes events of
  * tombstoned ones. Every row is saved right after its ICU call, so a retry only redoes
  * what is left. ICU/DB errors are thrown.
+ *
+ * `scope.coachDecisionId` limits the push to the rows that coach decision changed, so other
+ * pending drafts can't fail (and roll back) an Apply.
  */
 export async function pushPlannedSessions(
   userId: string,
   today: string,
-  deps: PlanPushDeps
+  deps: PlanPushDeps,
+  scope?: { coachDecisionId: string }
 ): Promise<PlanPushResult> {
   const conn = await deps.repo.findConnection(userId);
   if (!conn) return { status: 'not_connected' };
 
-  const pending = await deps.repo.listPending(userId, today);
+  const listed = await deps.repo.listPending(userId, today);
+  const pending = scope
+    ? listed.filter((row) => row.coachDecisionId === scope.coachDecisionId)
+    : listed;
   const counts = { created: 0, updated: 0, deleted: 0 };
 
   if (pending.length > 0) {

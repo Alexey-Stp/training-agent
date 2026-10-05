@@ -6,13 +6,14 @@ import { prisma } from './db';
 import { logger } from './logger';
 import { handlePlanPush, type PlanPushCommandDeps } from './plan-command';
 import { planWeek, type PlannedWeek, type PlanSourceDeps } from './plan-source';
-import { materializePlan, type PlanStoreDeps, type PlannedSessionRecord } from './plan-store';
+import { materializePlan, type PlanStoreDeps } from './plan-store';
 import { MSG_NO_PROFILE, toUserProfile } from './profile';
 import {
   formatDayHeader,
   formatSession,
   getSportIcon,
   groupSessionsByDate,
+  syncStatusLabel,
 } from './session-format';
 
 type UserWithProfile = User & { profile: Profile | null };
@@ -31,6 +32,7 @@ Available commands:
 /profile - View your current profile
 /set ftp <number> - Set your FTP (e.g., /set ftp 280)
 /plan - Generate a 7-day training plan
+/plan today - Show today's sessions
 /plan push - Put the plan on your intervals.icu calendar (syncs to your watch)
 /week show - Show this week of your season plan
 /race add <yyyy-MM-dd> <type> <A|B|C> <name> - Add a race
@@ -103,23 +105,6 @@ export async function handlePlanPushCommand(
   const built = await buildWeek(user, source);
   if (!built) return MSG_NO_PROFILE;
   return handlePlanPush(user.id, built.startDate, built.week.drafts, deps);
-}
-
-/** intervals.icu status line of a stored session, if there is anything to say. */
-function syncStatusLabel(row: PlannedSessionRecord | undefined): string | null {
-  if (!row) return null;
-  switch (row.status) {
-    case 'pushed':
-      return '📲 In intervals.icu';
-    case 'draft':
-      return row.icuEventId !== null ? '✏️ Changed, not pushed yet (/plan push)' : null;
-    case 'modified_externally':
-      return `⚠️ Changed in intervals.icu (${row.externalChange ?? 'edited'}), your version kept`;
-    case 'completed':
-      return '✅ Completed';
-    case 'skipped':
-      return '⏭ Skipped';
-  }
 }
 
 export async function handlePlan(

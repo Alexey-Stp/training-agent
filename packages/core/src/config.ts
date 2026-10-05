@@ -33,6 +33,8 @@ const envSchema = z.object({
   SEASON_PUBLISH_WINDOW_DAYS: z.coerce.number().int().min(1).max(28).default(14),
   // Free-form coach chat: messages per athlete per local day before the limit notice
   COACH_CHAT_DAILY_LIMIT: z.coerce.number().int().positive().default(30),
+  // Apply/Keep/Discuss buttons on a brief or chat suggestion stop working after this many hours
+  COACH_DECISION_TTL_HOURS: z.coerce.number().positive().default(24),
   // Morning brief: one pipeline run per linked athlete at Profile.briefTime (local time)
   DAILY_BRIEF_ENABLED: z
     .enum(['true', 'false'])
