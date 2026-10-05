@@ -254,7 +254,8 @@ function loadAt(rows: WeeklyWellnessInput[], range: DateRange): LoadPoint | null
       ? [{ date: r.date, ctl: round1(r.ctl), atl: nullableRound(r.atl), tsb: nullableRound(r.tsb) }]
       : []
   );
-  return points.sort((a, b) => b.date.localeCompare(a.date)).at(0) ?? null;
+  points.sort((a, b) => b.date.localeCompare(a.date));
+  return points.at(0) ?? null;
 }
 
 /** The 7 days before the week: the load start and HRV comparison look there. */
