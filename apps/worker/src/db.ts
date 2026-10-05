@@ -1222,7 +1222,13 @@ export const weeklyStatsRepo: WeeklyStatsRepo & WeeklyStatsReader = {
   },
 };
 
-function toWeeklyReviewRun(row: WeeklyReviewRunRow): WeeklyReviewRun {
+/** The run columns shared by `WeeklyReviewRun` and `BlockReviewRun` rows */
+type ReviewRunRow = Pick<
+  WeeklyReviewRunRow,
+  'id' | 'status' | 'coachDecisionId' | 'reportText' | 'reportKeyboard' | 'stageTimings'
+>;
+
+function toWeeklyReviewRun(row: ReviewRunRow): WeeklyReviewRun {
   return {
     id: row.id,
     status: row.status,
@@ -1284,15 +1290,9 @@ export const weeklyReviewRunRepo: WeeklyReviewRunRepo = {
   },
 };
 
+/** A block review run has the weekly review's run columns (and the same status values). */
 function toBlockReviewRun(row: BlockReviewRunRow): BlockReviewRun {
-  return {
-    id: row.id,
-    status: row.status,
-    coachDecisionId: row.coachDecisionId,
-    reportText: row.reportText,
-    reportKeyboard: row.reportKeyboard as InlineButton[][] | null,
-    stageTimings: row.stageTimings as StageTimings,
-  };
+  return toWeeklyReviewRun(row);
 }
 
 export const blockReviewRunRepo: BlockReviewRunRepo = {
