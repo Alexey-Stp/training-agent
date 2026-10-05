@@ -31,6 +31,7 @@ Available commands:
 /start - Show this help
 /profile - View your current profile
 /set ftp <number> - Set your FTP (e.g., /set ftp 280)
+/set lthr <bpm> - Set your threshold heart rate (e.g., /set lthr 168)
 /plan - Generate a 7-day training plan
 /plan today - Show today's sessions
 /plan push - Put the plan on your intervals.icu calendar (syncs to your watch)
@@ -63,6 +64,7 @@ export function handleProfile(user: UserWithProfile): string {
   return `📊 Your Training Profile
 
 🚴 FTP: ${p.ftp}W
+❤️ LTHR: ${p.lthr === null ? 'not set' : p.lthr + ' bpm'}
 🕐 Timezone: ${p.timezone}
 🏊 Swim Days: ${swimDays}
 🚴 Bike VO2 Day: ${p.bikeVo2Day}
@@ -81,6 +83,43 @@ export async function handleSetFtp(user: UserWithProfile, ftp: number): Promise<
   logger.info({ userId: user.id, ftp }, 'Updated FTP');
 
   return `✅ FTP updated to ${ftp}W`;
+}
+
+export async function handleSetLthr(user: UserWithProfile, lthr: number): Promise<string> {
+  await prisma.profile.update({
+    where: { userId: user.id },
+    data: { lthr },
+  });
+
+  logger.info({ userId: user.id, lthr }, 'Updated LTHR');
+
+  return `✅ Threshold heart rate updated to ${lthr} bpm`;
+}
+
+export const MSG_SET_USAGE = '❌ Usage: /set ftp <number> or /set lthr <bpm>';
+
+/** An integer setting within its range, or null. */
+function parseSetting(value: string | undefined, min: number, max: number): number | null {
+  const n = Number.parseInt(value ?? '', 10);
+  return Number.isNaN(n) || n < min || n > max ? null : n;
+}
+
+/** `/set ftp <watts>` and `/set lthr <bpm>`. */
+export async function handleSet(user: UserWithProfile, args: string[]): Promise<string> {
+  const key = args[0]?.toLowerCase();
+  if (key === 'ftp') {
+    const ftp = parseSetting(args[1], 50, 600);
+    return ftp === null
+      ? '❌ Invalid FTP value. Must be between 50 and 600.'
+      : handleSetFtp(user, ftp);
+  }
+  if (key === 'lthr') {
+    const lthr = parseSetting(args[1], 100, 220);
+    return lthr === null
+      ? '❌ Invalid threshold heart rate. Must be between 100 and 220 bpm.'
+      : handleSetLthr(user, lthr);
+  }
+  return MSG_SET_USAGE;
 }
 
 /** The 7-day plan from today in the athlete's timezone (season sessions where a season is active). */
@@ -191,6 +230,7 @@ Available commands:
 /start - Show help
 /profile - View your profile
 /set ftp <number> - Set your FTP
+/set lthr <bpm> - Set your threshold heart rate
 /plan - Generate training plan
 /week show - Show this season week
 /race add | /race list - Manage races

@@ -16,5 +16,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    // Each migration test boots PGlite and replays every migration in beforeAll; with all of them
+    // running in parallel the default 10s is too tight on slower machines
+    hookTimeout: 30_000,
   },
 });

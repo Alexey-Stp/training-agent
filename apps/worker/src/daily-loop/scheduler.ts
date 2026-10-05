@@ -16,6 +16,17 @@ export function dailyBriefSchedulerId(userId: string): string {
   return DAILY_BRIEF_JOB + ':' + userId;
 }
 
+export const EVENING_CLOSEOUT_QUEUE = 'evening-closeout';
+export const EVENING_CLOSEOUT_JOB = 'evening-closeout';
+
+export interface EveningCloseoutJob {
+  userId: string;
+}
+
+export function eveningCloseoutSchedulerId(userId: string): string {
+  return EVENING_CLOSEOUT_JOB + ':' + userId;
+}
+
 /** What the morning brief needs to know about an athlete. */
 export interface BriefProfile {
   /** Private chat: the chat id is the athlete's Telegram user id */
@@ -23,6 +34,8 @@ export interface BriefProfile {
   timezone: string;
   /** `HH:mm` local; null uses DAILY_BRIEF_DEFAULT_TIME */
   briefTime: string | null;
+  /** `HH:mm` local; null uses EVENING_CLOSEOUT_DEFAULT_TIME */
+  closeoutTime: string | null;
 }
 
 export interface BriefProfileRepo {
@@ -31,7 +44,7 @@ export interface BriefProfileRepo {
 
 export interface DailyBriefSchedulerDeps {
   profiles: BriefProfileRepo;
-  /** DAILY_BRIEF_DEFAULT_TIME */
+  /** DAILY_BRIEF_DEFAULT_TIME, or EVENING_CLOSEOUT_DEFAULT_TIME for the close-out */
   defaultTime: string;
 }
 
@@ -41,16 +54,33 @@ export function briefCron(briefTime: string): string {
   return [minutes, hours, '*', '*', '*'].join(' ');
 }
 
+function repeatAt(time: string, timezone: string): { pattern: string; tz: string } {
+  return { pattern: briefCron(time), tz: timezone };
+}
+
 /** The repeat options of an athlete's brief scheduler: local briefTime, every day. */
 export function briefRepeat(
   profile: BriefProfile,
   defaultTime: string
 ): { pattern: string; tz: string } {
-  return { pattern: briefCron(profile.briefTime ?? defaultTime), tz: profile.timezone };
+  return repeatAt(profile.briefTime ?? defaultTime, profile.timezone);
 }
 
-type BriefQueue = Pick<
-  Queue<DailyBriefJob>,
+/** The repeat options of an athlete's close-out scheduler: local closeoutTime, every day. */
+export function closeoutRepeat(
+  profile: BriefProfile,
+  defaultTime: string
+): { pattern: string; tz: string } {
+  return repeatAt(profile.closeoutTime ?? defaultTime, profile.timezone);
+}
+
+/** Job data every daily cron job carries */
+interface DailyCronJob {
+  userId: string;
+}
+
+type CronQueue = Pick<
+  Queue<DailyCronJob>,
   'upsertJobScheduler' | 'removeJobScheduler' | 'getJobSchedulers'
 >;
 
@@ -65,13 +95,28 @@ const JOB_OPTS = {
   removeOnFail: { age: 7 * 86400 },
 };
 
+/** One daily per-athlete cron job: its name (also the scheduler id prefix) and local time. */
+interface DailyCronSpec {
+  jobName: string;
+  repeat(profile: BriefProfile, defaultTime: string): { pattern: string; tz: string };
+}
+
+const BRIEF_SPEC: DailyCronSpec = { jobName: DAILY_BRIEF_JOB, repeat: briefRepeat };
+
+const CLOSEOUT_SPEC: DailyCronSpec = { jobName: EVENING_CLOSEOUT_JOB, repeat: closeoutRepeat };
+
+function schedulerId(spec: { jobName: string }, userId: string): string {
+  return spec.jobName + ':' + userId;
+}
+
 /**
- * One repeatable `daily-brief:<userId>` job per linked athlete, firing at the athlete's local
- * briefTime. BullMQ evaluates the cron in `tz`, so DST shifts move the UTC instant, not the
- * local time. Unlike the `every` sync schedulers, a cron scheduler doesn't fire on creation.
+ * One repeatable `<jobName>:<userId>` job per linked athlete, firing at the athlete's local
+ * time. BullMQ evaluates the cron in `tz`, so DST shifts move the UTC instant, not the local
+ * time. Unlike the `every` sync schedulers, a cron scheduler doesn't fire on creation.
  */
-export function createDailyBriefScheduler(
-  queue: BriefQueue,
+function createDailyCronScheduler(
+  queue: CronQueue,
+  spec: DailyCronSpec,
   deps: DailyBriefSchedulerDeps
 ): IcuSyncScheduler {
   return {
@@ -79,15 +124,31 @@ export function createDailyBriefScheduler(
       const profile = await deps.profiles.findBriefProfile(userId);
       if (!profile) return;
       await queue.upsertJobScheduler(
-        dailyBriefSchedulerId(userId),
-        briefRepeat(profile, deps.defaultTime),
-        { name: DAILY_BRIEF_JOB, data: { userId }, opts: JOB_OPTS }
+        schedulerId(spec, userId),
+        spec.repeat(profile, deps.defaultTime),
+        { name: spec.jobName, data: { userId }, opts: JOB_OPTS }
       );
     },
     async unschedule(userId) {
-      await queue.removeJobScheduler(dailyBriefSchedulerId(userId));
+      await queue.removeJobScheduler(schedulerId(spec, userId));
     },
   };
+}
+
+/** The morning brief scheduler: `daily-brief:<userId>` at the local briefTime. */
+export function createDailyBriefScheduler(
+  queue: CronQueue,
+  deps: DailyBriefSchedulerDeps
+): IcuSyncScheduler {
+  return createDailyCronScheduler(queue, BRIEF_SPEC, deps);
+}
+
+/** The evening close-out scheduler: `evening-closeout:<userId>` at the local closeoutTime. */
+export function createEveningCloseoutScheduler(
+  queue: CronQueue,
+  deps: DailyBriefSchedulerDeps
+): IcuSyncScheduler {
+  return createDailyCronScheduler(queue, CLOSEOUT_SPEC, deps);
 }
 
 /** BullMQ rejects `:` in custom job ids, hence the dashes. */
@@ -145,11 +206,12 @@ export function combineSchedulers(...schedulers: IcuSyncScheduler[]): IcuSyncSch
 }
 
 /**
- * Worker startup: (re)schedules every linked athlete whose brief scheduler is missing or has a
- * stale time or timezone, and removes brief schedulers whose connection is gone.
+ * Worker startup: (re)schedules every linked athlete whose scheduler is missing or has a stale
+ * time or timezone, and removes the spec's schedulers whose connection is gone.
  */
-export async function reconcileDailyBriefSchedulers(
-  queue: BriefQueue,
+async function reconcileDailyCronSchedulers(
+  queue: CronQueue,
+  spec: DailyCronSpec,
   scheduler: IcuSyncScheduler,
   connectedUserIds: string[],
   deps: DailyBriefSchedulerDeps
@@ -164,12 +226,12 @@ export async function reconcileDailyBriefSchedulers(
   const stale = connected.filter((userId, i) => {
     const profile = profiles[i];
     if (!profile) return false;
-    const want = briefRepeat(profile, deps.defaultTime);
-    const have = byKey.get(dailyBriefSchedulerId(userId));
+    const want = spec.repeat(profile, deps.defaultTime);
+    const have = byKey.get(schedulerId(spec, userId));
     return have?.pattern !== want.pattern || have.tz !== want.tz;
   });
 
-  const prefix = DAILY_BRIEF_JOB + ':';
+  const prefix = spec.jobName + ':';
   const connectedSet = new Set(connected);
   const orphans = existing
     .filter((s) => s.key.startsWith(prefix))
@@ -181,4 +243,24 @@ export async function reconcileDailyBriefSchedulers(
     ...orphans.map((userId) => scheduler.unschedule(userId)),
   ]);
   return { scheduled: stale.length, removed: orphans.length };
+}
+
+/** Startup reconcile of the morning brief schedulers. */
+export function reconcileDailyBriefSchedulers(
+  queue: CronQueue,
+  scheduler: IcuSyncScheduler,
+  connectedUserIds: string[],
+  deps: DailyBriefSchedulerDeps
+): Promise<{ scheduled: number; removed: number }> {
+  return reconcileDailyCronSchedulers(queue, BRIEF_SPEC, scheduler, connectedUserIds, deps);
+}
+
+/** Startup reconcile of the evening close-out schedulers. */
+export function reconcileEveningCloseoutSchedulers(
+  queue: CronQueue,
+  scheduler: IcuSyncScheduler,
+  connectedUserIds: string[],
+  deps: DailyBriefSchedulerDeps
+): Promise<{ scheduled: number; removed: number }> {
+  return reconcileDailyCronSchedulers(queue, CLOSEOUT_SPEC, scheduler, connectedUserIds, deps);
 }

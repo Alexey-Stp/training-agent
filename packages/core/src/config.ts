@@ -5,7 +5,7 @@ const encKeySchema = z
   .string()
   .refine(isValidEncKey, 'must be base64 of 32 bytes (openssl rand -base64 32)');
 
-/** `HH:mm`, 24h: Profile.briefTime and DAILY_BRIEF_DEFAULT_TIME */
+/** `HH:mm`, 24h: Profile.briefTime/closeoutTime and their *_DEFAULT_TIME */
 export const BRIEF_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 const envSchema = z.object({
@@ -43,6 +43,17 @@ const envSchema = z.object({
   DAILY_BRIEF_DEFAULT_TIME: z.string().regex(BRIEF_TIME_RE, 'must be HH:mm (24h)').default('06:30'),
   // Morning check-in: minutes the brief waits for readiness/soreness answers before it goes out
   DAILY_CHECKIN_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(15),
+  // Evening close-out: matches the day's activities to the plan at Profile.closeoutTime (local)
+  EVENING_CLOSEOUT_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  EVENING_CLOSEOUT_DEFAULT_TIME: z
+    .string()
+    .regex(BRIEF_TIME_RE, 'must be HH:mm (24h)')
+    .default('20:30'),
+  // A matched session whose duration is off by more than this many percent gets a close-out note
+  CLOSEOUT_DEVIATION_THRESHOLD_PCT: z.coerce.number().positive().default(25),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

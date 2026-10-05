@@ -47,6 +47,7 @@ const BRIEF_PROFILE: BriefProfile = {
   telegramChatId: CHAT_ID,
   timezone: 'Europe/Prague',
   briefTime: null,
+  closeoutTime: null,
 };
 const PROFILE: UserProfile = {
   ftp: 300,

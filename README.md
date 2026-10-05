@@ -114,6 +114,7 @@ See [CI_CD.md](CI_CD.md) for complete CI/CD documentation.
 - `/start` - Welcome message and help
 - `/profile` - View current training profile
 - `/set ftp <number>` - Update FTP (e.g., `/set ftp 280`)
+- `/set lthr <bpm>` - Set your lactate threshold heart rate (e.g., `/set lthr 168`), used by the evening close-out to guess the intensity of runs, swims and rides without power
 - `/plan` - Generate 7-day training plan with rules applied (saved, shows each session's intervals.icu status). With an active season, days the season covers show the season's sessions
 - `/plan push` - Put the 7-day plan on your intervals.icu calendar as structured workouts (they sync to Garmin)
 - `/week show` - Show this week of your active season plan: the block's targets, the sessions that hit them, and any rules-engine adjustments
@@ -297,6 +298,32 @@ Proposed
 
 Set `DAILY_BRIEF_ENABLED=false` to turn it off; the worker then removes the schedulers on startup.
 
+### Evening close-out
+
+Every linked athlete also gets a close-out at `Profile.closeoutTime` (default `EVENING_CLOSEOUT_DEFAULT_TIME`, 20:30) in their own timezone. The worker runs a final activity sync and matches the day's intervals.icu activities to the day's planned sessions:
+
+- **Matching.** Same sport only, one activity per session, closest duration first. Two runs on a day pair up with the two planned runs by the smallest duration gap.
+- **Matched** sessions become `completed`, with `deviationPct` (actual vs planned duration) and `actualIntensity`: a zone guessed from average power vs FTP for rides, otherwise from average heart rate vs `/set lthr` (empty without it).
+- **Unmatched** sessions become `skipped`. A session you changed in intervals.icu (`modified_externally`) keeps its status.
+- **Unplanned** activities stay unlinked and are flagged for the weekly review (`Activity.closedOutAt` set, `plannedSessionId` empty).
+
+It is quiet by default. A short message goes out only when something is worth mentioning:
+
+```
+🌙 Today's close-out
+
+• Long ride (3h) didn't happen today. No problem, I'll factor it into the weekly review.
+• Tempo run was 40% shorter than planned (30 of 50 min). Noted for the weekly review.
+• Unplanned swim (45 min) logged. Flagged for the weekly review.
+```
+
+- **Missed key session**: a skipped Z4/Z5 session or one of 90 minutes or more. A skipped easy session is recorded silently.
+- **Deviation**: a matched session whose duration is off by more than `CLOSEOUT_DEVIATION_THRESHOLD_PCT` (25%).
+- **Unplanned workout**: any activity with no planned session.
+- **One per day** (`EveningCloseoutRun`). If intervals.icu is down, nothing is written and the job retries, so a session is never marked skipped on stale data. A failed send is retried with the stored message.
+
+Set `EVENING_CLOSEOUT_ENABLED=false` to turn it off.
+
 ## intervals.icu Integration
 
 `packages/integrations-icu` (`@triathlon/integrations-icu`) is a typed REST client for [intervals.icu](https://intervals.icu). The worker uses it to validate credentials in `/connect icu` and to sync activities and wellness.
@@ -348,7 +375,7 @@ The worker also pulls daily wellness into the `Wellness` table, one row per athl
   ```
 
 - **External edits.** A repeatable `icu-plan-reconcile` job per linked athlete (every 60 minutes, `ICU_PLAN_RECONCILE_EVERY_MIN`) compares a content hash (date, name, sport, description) of each upcoming pushed event with the hash stored at push time. If the athlete moved, edited or deleted the event in intervals.icu, the session is flagged `modified_externally` with the reason (for example "moved to 2026-10-02"). Flagged sessions are never overwritten by `/plan` or `/plan push`. They are shown in `/plan` and in the `/plan push` reply.
-- **Statuses.** `draft` (local changes not pushed yet), `pushed`, `modified_externally`, and `completed` / `skipped`, which are reserved for activity matching.
+- **Statuses.** `draft` (local changes not pushed yet), `pushed`, `modified_externally`, and `completed` / `skipped`, set by the evening close-out when it matches the day's activities.
 
 Set `SECRETS_ENC_KEY` in `.env` (base64 of 32 bytes: `openssl rand -base64 32`). Both bot and worker need it. To rotate, move the old key to `SECRETS_ENC_KEY_PREVIOUS` and set a new `SECRETS_ENC_KEY`.
 
@@ -523,6 +550,7 @@ Available commands:
 /start - Show this help
 /profile - View your current profile
 /set ftp <number> - Set your FTP (e.g., /set ftp 280)
+/set lthr <bpm> - Set your threshold heart rate (e.g., /set lthr 168)
 /plan - Generate a 7-day training plan
 /plan push - Put the plan on your intervals.icu calendar (syncs to your watch)
 /week show - Show this week of your season plan

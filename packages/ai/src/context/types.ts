@@ -1,5 +1,6 @@
 import type {
   Intensity,
+  PowerZone,
   Race,
   SeasonPlan,
   Sport,
@@ -69,13 +70,7 @@ export interface DailyContextDeps {
   decisions: { listRecent(userId: string, upTo: string, limit: number): Promise<CoachDecision[]> };
 }
 
-export interface PowerZone {
-  zone: Intensity;
-  label: string;
-  minWatts: number;
-  /** null for the open-ended top zone */
-  maxWatts: number | null;
-}
+export type { PowerZone };
 
 export interface AthleteContext {
   profile: UserProfile;
