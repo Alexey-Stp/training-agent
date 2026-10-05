@@ -89,14 +89,16 @@ function nextWeek(
  * Weekly hours for each plan week (block types in order, week 1 first). Load weeks grow at most
  * `maxWeeklyRamp` over the previous load week up to the phase ceiling; every `recoveryEvery`th
  * plan week in base/build/peak drops to `recoveryFactor` of the last load week; taper and race
- * weeks scale down from the last load week.
+ * weeks scale down from the last load week. `firstIndex` is the plan week of the first entry, so
+ * a re-projection that starts mid-season keeps the season's recovery cadence.
  */
 export function buildWeeklyVolumes(
   weekTypes: TrainingBlockType[],
   available: number,
   start: number,
-  config: BlockGeneratorConfig
+  config: BlockGeneratorConfig,
+  firstIndex = 1
 ): VolumeWeek[] {
   const state: RampState = { start, lastLoad: null, taperWeek: 0 };
-  return weekTypes.map((type, i) => nextWeek(i + 1, type, state, available, config));
+  return weekTypes.map((type, i) => nextWeek(firstIndex + i, type, state, available, config));
 }

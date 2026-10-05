@@ -53,3 +53,52 @@ export function formatSeasonTable(blocks: TrainingBlock[]): string {
     )
     .join('\n');
 }
+
+export interface BlockDiff {
+  /** Old blocks after the freeze */
+  before: string;
+  /** Re-projected blocks after the freeze */
+  after: string;
+  /** e.g. `Next block: 10.8 → 7.6 h/wk · remaining 98.0 → 84.4 h` */
+  summary: string;
+}
+
+function totalHours(blocks: TrainingBlock[]): number {
+  return blocks.reduce((sum, b) => sum + b.targetWeeklyHours * b.weeks, 0);
+}
+
+function after(blocks: TrainingBlock[], freezeThrough: string): TrainingBlock[] {
+  return blocks.filter((b) => blockEndDate(b) > freezeThrough).sort((a, b) => a.order - b.order);
+}
+
+/**
+ * Old-vs-new tables of the blocks after `freezeThrough` (plain text for `<pre>`), plus a summary
+ * of the next block's weekly hours and the remaining season volume.
+ */
+export function formatBlockDiff(
+  oldBlocks: TrainingBlock[],
+  newBlocks: TrainingBlock[],
+  freezeThrough: string
+): BlockDiff {
+  const oldRest = after(oldBlocks, freezeThrough);
+  const newRest = after(newBlocks, freezeThrough).filter((b) => b.startDate > freezeThrough);
+  const oldNext = oldRest.find((b) => b.startDate > freezeThrough) ?? oldRest.at(0);
+  const newNext = newRest.at(0);
+  const parts = [
+    'Next block: ' +
+      (oldNext?.targetWeeklyHours.toFixed(1) ?? '–') +
+      ' → ' +
+      (newNext?.targetWeeklyHours.toFixed(1) ?? '–') +
+      ' h/wk',
+    'remaining ' +
+      totalHours(oldRest.filter((b) => b.startDate > freezeThrough)).toFixed(1) +
+      ' → ' +
+      totalHours(newRest).toFixed(1) +
+      ' h',
+  ];
+  return {
+    before: formatSeasonTable(oldRest),
+    after: formatSeasonTable(newRest),
+    summary: parts.join(' · '),
+  };
+}

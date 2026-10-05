@@ -33,6 +33,12 @@ export const WEEKLY_STATS_JOB = 'weekly-stats';
 export const WEEKLY_REVIEW_QUEUE = 'weekly-review';
 export const WEEKLY_REVIEW_JOB = 'weekly-review';
 
+export const BLOCK_REVIEW_QUEUE = 'block-review';
+/** The Sunday scheduler's job: it reviews only when today is the last day of a block */
+export const BLOCK_REVIEW_JOB = 'block-review';
+/** A one-off job enqueued by `/race move` */
+export const BLOCK_REVIEW_RACE_MOVE_JOB = 'block-review-race-move';
+
 /** Cron day-of-week numbers */
 export const MONDAY = 1;
 export const SUNDAY = 0;
@@ -116,6 +122,17 @@ export function weeklyReviewRepeat(
   return { pattern: weeklyCron(time, SUNDAY), tz: profile.timezone };
 }
 
+/**
+ * The repeat options of an athlete's block review scheduler: Sundays at BLOCK_REVIEW_TIME. Every
+ * block ends on a Sunday; the job skips the Sundays that don't end one.
+ */
+export function blockReviewRepeat(
+  profile: BriefProfile,
+  time: string
+): { pattern: string; tz: string } {
+  return { pattern: weeklyCron(time, SUNDAY), tz: profile.timezone };
+}
+
 /** Job data every daily cron job carries */
 interface DailyCronJob {
   userId: string;
@@ -152,6 +169,11 @@ const WEEKLY_STATS_SPEC: DailyCronSpec = { jobName: WEEKLY_STATS_JOB, repeat: we
 const WEEKLY_REVIEW_SPEC: DailyCronSpec = {
   jobName: WEEKLY_REVIEW_JOB,
   repeat: weeklyReviewRepeat,
+};
+
+const BLOCK_REVIEW_SPEC: DailyCronSpec = {
+  jobName: BLOCK_REVIEW_JOB,
+  repeat: blockReviewRepeat,
 };
 
 function schedulerId(spec: { jobName: string }, userId: string): string {
@@ -214,6 +236,19 @@ export function createWeeklyReviewScheduler(
   deps: DailyBriefSchedulerDeps
 ): IcuSyncScheduler {
   return createDailyCronScheduler(queue, WEEKLY_REVIEW_SPEC, deps);
+}
+
+/** The block review scheduler: `block-review:<userId>` on Sundays at the local BLOCK_REVIEW_TIME. */
+export function createBlockReviewScheduler(
+  queue: CronQueue,
+  deps: DailyBriefSchedulerDeps
+): IcuSyncScheduler {
+  return createDailyCronScheduler(queue, BLOCK_REVIEW_SPEC, deps);
+}
+
+/** BullMQ rejects `:` in custom job ids, hence the dashes. */
+export function blockReviewRaceMoveJobId(userId: string, raceId: string, newDate: string): string {
+  return ['block-review-race', userId, raceId, newDate].join('-');
 }
 
 /** BullMQ rejects `:` in custom job ids, hence the dashes. */
@@ -348,4 +383,14 @@ export function reconcileWeeklyReviewSchedulers(
   deps: DailyBriefSchedulerDeps
 ): Promise<{ scheduled: number; removed: number }> {
   return reconcileDailyCronSchedulers(queue, WEEKLY_REVIEW_SPEC, scheduler, connectedUserIds, deps);
+}
+
+/** Startup reconcile of the block review schedulers. */
+export function reconcileBlockReviewSchedulers(
+  queue: CronQueue,
+  scheduler: IcuSyncScheduler,
+  connectedUserIds: string[],
+  deps: DailyBriefSchedulerDeps
+): Promise<{ scheduled: number; removed: number }> {
+  return reconcileDailyCronSchedulers(queue, BLOCK_REVIEW_SPEC, scheduler, connectedUserIds, deps);
 }

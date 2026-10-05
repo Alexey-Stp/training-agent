@@ -1,9 +1,10 @@
 import {
   PrismaClient,
+  type BlockReviewRun as BlockReviewRunRow,
   type DailyBriefRun as DailyBriefRunRow,
   type EveningCloseoutRun as EveningCloseoutRunRow,
   type PlannedSession,
-  type Prisma,
+  Prisma,
   type WeeklyReviewRun as WeeklyReviewRunRow,
 } from '@prisma/client';
 import {
@@ -14,7 +15,12 @@ import {
   Sport,
   TrainingBlockType,
 } from '@triathlon/core';
-import type { PlannedSessionDraft, WorkoutBlock } from '@triathlon/core';
+import type {
+  PlannedSessionDraft,
+  TrainingBlock,
+  WeeklyStats,
+  WorkoutBlock,
+} from '@triathlon/core';
 import type {
   ActivitySummary,
   CoachDecision,
@@ -54,6 +60,13 @@ import type {
 import type { CheckInRepo } from './daily-loop/checkin';
 import type { WeeklyStatsRepo } from './reviews/weekly-stats-store';
 import type { WeeklyReviewRun, WeeklyReviewRunRepo } from './reviews/weekly-review-store';
+import type {
+  BlockReviewRun,
+  BlockReviewRunRepo,
+  ProposedSeason,
+  SeasonReprojectRepo,
+  WeeklyStatsReader,
+} from './reviews/block-review-store';
 import {
   WELLNESS_DEVICE_FIELDS,
   type WellnessDeviceField,
@@ -452,32 +465,56 @@ export const raceRepo: RaceRepo = {
     });
     return rows.map(toRaceRecord);
   },
+
+  async findByDate(userId, date) {
+    const rows = await prisma.race.findMany({
+      where: { userId, date },
+      orderBy: { createdAt: 'asc' },
+    });
+    return rows.map(toRaceRecord);
+  },
+
+  async moveDate(userId, raceId, date) {
+    const { count } = await prisma.race.updateMany({
+      where: { id: raceId, userId },
+      data: { date },
+    });
+    return count > 0;
+  },
 };
+
+function toTrainingBlock(b: Prisma.TrainingBlockGetPayload<object>): TrainingBlock {
+  return {
+    order: b.order,
+    type: b.type as TrainingBlockType,
+    startDate: b.startDate,
+    weeks: b.weeks,
+    focus: b.focus,
+    targetWeeklyHours: b.targetWeeklyHours,
+    targetSwimM: b.targetSwimM,
+    targetBikeH: b.targetBikeH,
+    targetRunKm: b.targetRunKm,
+    targetCtl: b.targetCtl,
+  };
+}
+
+function activeSeasonQuery(userId: string) {
+  return {
+    where: { userId, status: 'active' },
+    orderBy: { updatedAt: 'desc' },
+    include: { blocks: { orderBy: { order: 'asc' } }, aRace: true },
+  } satisfies Prisma.SeasonPlanFindFirstArgs;
+}
 
 export const seasonRepo: SeasonStoreRepo = {
   async findActiveSeason(userId) {
-    const row = await prisma.seasonPlan.findFirst({
-      where: { userId, status: 'active' },
-      orderBy: { updatedAt: 'desc' },
-      include: { blocks: { orderBy: { order: 'asc' } }, aRace: true },
-    });
+    const row = await prisma.seasonPlan.findFirst(activeSeasonQuery(userId));
     if (!row) return null;
     return {
       startDate: row.startDate,
       status: row.status as SeasonPlanStatus,
       aRace: row.aRace ? toRaceRecord(row.aRace) : null,
-      blocks: row.blocks.map((b) => ({
-        order: b.order,
-        type: b.type as TrainingBlockType,
-        startDate: b.startDate,
-        weeks: b.weeks,
-        focus: b.focus,
-        targetWeeklyHours: b.targetWeeklyHours,
-        targetSwimM: b.targetSwimM,
-        targetBikeH: b.targetBikeH,
-        targetRunKm: b.targetRunKm,
-        targetCtl: b.targetCtl,
-      })),
+      blocks: row.blocks.map(toTrainingBlock),
     };
   },
 
@@ -490,6 +527,8 @@ export const seasonRepo: SeasonStoreRepo = {
           userId,
           startDate: draft.startDate,
           aRaceId: draft.aRaceId,
+          weeklyHoursAvailable: draft.weeklyHoursAvailable,
+          weakSport: draft.weakSport,
           status: 'draft',
           blocks: { create: draft.blocks.map((b) => ({ ...b })) },
         },
@@ -795,6 +834,13 @@ export const coachAnswerRepo: CoachAnswerRepo = {
   },
 
   async findAnswerText(userId, { id, origin }) {
+    if (origin === 'block') {
+      const review = await prisma.blockReviewRun.findFirst({
+        where: { userId, coachDecisionId: id },
+        select: { reportText: true },
+      });
+      return review?.reportText ?? null;
+    }
     if (origin === 'weekly') {
       const review = await prisma.weeklyReviewRun.findFirst({
         where: { userId, coachDecisionId: id },
@@ -1096,7 +1142,15 @@ export const closeoutRepo: CloseoutRepo = {
   },
 };
 
-export const weeklyStatsRepo: WeeklyStatsRepo = {
+export const weeklyStatsRepo: WeeklyStatsRepo & WeeklyStatsReader = {
+  async listRange(userId, range) {
+    const rows = await prisma.weeklyStats.findMany({
+      where: { userId, weekStart: { gte: range.from, lte: range.to } },
+      select: { stats: true },
+    });
+    return rows.map((r) => r.stats as unknown as WeeklyStats);
+  },
+
   async loadRange(userId, { from, to }) {
     const [sessions, activities, wellness, profile] = await Promise.all([
       prisma.plannedSession.findMany({
@@ -1227,5 +1281,156 @@ export const weeklyReviewRunRepo: WeeklyReviewRunRepo = {
       where: { id },
       data: { status: 'failed', error, stageTimings: toJson(stageTimings) },
     });
+  },
+};
+
+function toBlockReviewRun(row: BlockReviewRunRow): BlockReviewRun {
+  return {
+    id: row.id,
+    status: row.status,
+    coachDecisionId: row.coachDecisionId,
+    reportText: row.reportText,
+    reportKeyboard: row.reportKeyboard as InlineButton[][] | null,
+    stageTimings: row.stageTimings as StageTimings,
+  };
+}
+
+export const blockReviewRunRepo: BlockReviewRunRepo = {
+  async claim({ userId, seasonPlanId, key, trigger }, now, leaseMs) {
+    // skipDuplicates: the row may exist from an earlier trigger or attempt
+    await prisma.blockReviewRun.createMany({
+      data: [{ userId, seasonPlanId, key, trigger }],
+      skipDuplicates: true,
+    });
+    // One conditional update takes the run over, so two concurrent triggers can't both win
+    const { count } = await prisma.blockReviewRun.updateMany({
+      where: {
+        userId,
+        seasonPlanId,
+        key,
+        OR: [
+          { status: { in: ['pending', 'failed'] } },
+          { status: 'running', startedAt: { lt: new Date(now.getTime() - leaseMs) } },
+        ],
+      },
+      data: { status: 'running', startedAt: now, error: null },
+    });
+    const row = await prisma.blockReviewRun.findUniqueOrThrow({
+      where: { userId_seasonPlanId_key: { userId, seasonPlanId, key } },
+    });
+    if (count > 0) return { status: 'claimed', run: toBlockReviewRun(row) };
+    return { status: row.status === 'running' ? 'in_progress' : 'already_sent' };
+  },
+
+  async saveReport(id, report) {
+    await prisma.blockReviewRun.update({
+      where: { id },
+      data: {
+        coachDecisionId: report.coachDecisionId,
+        verdict: toJson(report.verdict),
+        proposedBlocks: report.proposal === null ? Prisma.DbNull : toJson(report.proposal),
+        freezeThrough: report.freezeThrough,
+        seasonUpdatedAt: report.seasonUpdatedAt,
+        reportText: report.reportText,
+        reportKeyboard: toJson(report.reportKeyboard),
+        stale: report.stale,
+        stageTimings: toJson(report.stageTimings),
+      },
+    });
+  },
+
+  async markSent(id, sentAt, stageTimings) {
+    await prisma.blockReviewRun.update({
+      where: { id },
+      data: { status: 'sent', sentAt, error: null, stageTimings: toJson(stageTimings) },
+    });
+  },
+
+  async markFailed(id, error, stageTimings) {
+    await prisma.blockReviewRun.update({
+      where: { id },
+      data: { status: 'failed', error, stageTimings: toJson(stageTimings) },
+    });
+  },
+
+  async findAnswerable(userId, runId) {
+    const row = await prisma.blockReviewRun.findFirst({
+      where: { id: runId, userId },
+      select: {
+        id: true,
+        seasonPlanId: true,
+        coachDecisionId: true,
+        proposedBlocks: true,
+        seasonUpdatedAt: true,
+        reportText: true,
+      },
+    });
+    if (!row) return null;
+    const { proposedBlocks, ...rest } = row;
+    return { ...rest, proposal: proposedBlocks as unknown as ProposedSeason | null };
+  },
+};
+
+/** Thrown inside the re-projection transaction to roll back the decision update. */
+class StaleSeasonError extends Error {}
+
+export const seasonReprojectRepo: SeasonReprojectRepo = {
+  async findActiveRecord(userId) {
+    const row = await prisma.seasonPlan.findFirst(activeSeasonQuery(userId));
+    if (!row) return null;
+    return {
+      id: row.id,
+      updatedAt: row.updatedAt,
+      weeklyHoursAvailable: row.weeklyHoursAvailable,
+      weakSport: row.weakSport as Sport | null,
+      season: {
+        startDate: row.startDate,
+        status: row.status as SeasonPlanStatus,
+        aRace: row.aRace ? toRaceRecord(row.aRace) : null,
+        blocks: row.blocks.map(toTrainingBlock),
+      },
+    };
+  },
+
+  async applyReprojection(userId, { seasonPlanId, expectedUpdatedAt, decisionId, proposal, now }) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        // Conditional: a double tap or a concurrent Decline wins, nothing changes here
+        const decided = await tx.coachDecision.updateMany({
+          where: { id: decisionId, userId, accepted: null },
+          data: { accepted: true, answeredAt: now, userAction: 'apply' },
+        });
+        if (decided.count === 0) return 'answered' as const;
+        // Optimistic lock: the proposal only applies to the season version it was computed from,
+        // and to the A-race date it was planned for (moving a race doesn't touch the season row)
+        const season = await tx.seasonPlan.updateMany({
+          where: {
+            id: seasonPlanId,
+            userId,
+            status: 'active',
+            updatedAt: expectedUpdatedAt,
+            aRace: { is: { date: proposal.raceDate } },
+          },
+          data: { startDate: proposal.startDate },
+        });
+        if (season.count === 0) throw new StaleSeasonError('season changed');
+
+        const { frozenCount, truncated, blocks } = proposal;
+        await tx.trainingBlock.deleteMany({ where: { seasonPlanId, order: { gt: frozenCount } } });
+        if (truncated) {
+          await tx.trainingBlock.updateMany({
+            where: { seasonPlanId, order: truncated.order },
+            data: { weeks: truncated.weeks },
+          });
+        }
+        await tx.trainingBlock.createMany({
+          data: blocks.slice(frozenCount).map((b) => ({ seasonPlanId, ...b })),
+        });
+        return 'applied' as const;
+      });
+    } catch (error) {
+      if (error instanceof StaleSeasonError) return 'stale';
+      throw error;
+    }
   },
 };

@@ -54,6 +54,9 @@ export interface SeasonDraftInput {
   startDate: string;
   aRaceId: string;
   blocks: TrainingBlock[];
+  /** The wizard's answers, kept for block-review re-projections */
+  weeklyHoursAvailable: number;
+  weakSport: Sport | null;
 }
 
 export type ActivateDraftResult =
@@ -233,6 +236,8 @@ export async function handleSeasonPreview(
     startDate: generated.startDate,
     aRaceId: aRace.id,
     blocks: generated.blocks,
+    weeklyHoursAvailable: input.hours,
+    weakSport: input.weakSport ?? null,
   });
   const active = await deps.seasons.findActiveSeason(user.id);
   const otherRaces = otherRaceLines(races, aRace, generated.blocks);

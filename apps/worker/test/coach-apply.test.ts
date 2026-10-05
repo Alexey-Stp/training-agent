@@ -306,6 +306,13 @@ describe('handleCoachAnswer: keep and errors', () => {
     expect(await tap('apply', 'nope')).toBe(MSG_DECISION_NOT_FOUND);
     expect(await tap('keep', undefined)).toBe(MSG_DECISION_NOT_FOUND);
   });
+
+  it('leaves block review decisions to their own Confirm/Decline', async () => {
+    answers.add({ origin: 'block', finalAction: 'adjust', finalChanges: [] });
+
+    expect(await tap('keep')).toBe(MSG_DECISION_NOT_FOUND);
+    expect(answers.decisions.get(DECISION_ID)?.accepted).toBeNull();
+  });
 });
 
 const VO2 = '2026-10-06/bike-0';

@@ -1,0 +1,25 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`runBlockReviewJob: block ended at 70% volume > shows the old-vs-new block table with Confirm/Decline 1`] = `
+"🧱 <b>Block 2 (build) review</b> · 14.09 → 04.10
+📦 Volume 70% of target (7.0/10.0 h/wk)
+📈 CTL 50.0 → 53.0 (+3.0)
+📊 Compliance declining: 80% · 70% · 60%
+
+You managed 70% of the build volume (7.0 of 10.0 h/week).
+✅ CTL up 3.0
+⚠️ Compliance fell to 60% in the last week
+
+<b>Re-projection</b> · Next block: 10.8 → 8.2 h/wk · remaining 49.8 → 40.4 h
+Before:
+<pre># Type  Dates       Wk h/wk Swim Bike  Run
+3 peak  05.10-25.10  3 10.8 5.0k 5.9h 32km
+4 taper 26.10-08.11  2  6.4 5.0k 3.5h 19km
+5 race  09.11-15.11  1  4.6 5.0k 2.5h 14km</pre>
+After:
+<pre># Type  Dates       Wk h/wk Swim Bike  Run
+3 peak  05.10-25.10  3  8.2 3.1k 4.5h 25km
+4 taper 26.10-08.11  2  5.9 2.2k 3.3h 18km
+5 race  09.11-15.11  1  4.0 1.5k 2.2h 12km</pre>
+Past weeks stay as they are. Confirm to apply it from tomorrow."
+`;

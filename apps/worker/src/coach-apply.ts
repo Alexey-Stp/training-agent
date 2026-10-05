@@ -345,7 +345,8 @@ export async function handleCoachAnswer(
   const { decisionId, answer } = input;
   const decision =
     decisionId === undefined ? null : await deps.repo.findDecision(user.id, decisionId);
-  if (!decision) return MSG_DECISION_NOT_FOUND;
+  // Block reviews are answered with their own Confirm/Decline (block-review-apply.ts)
+  if (!decision || decision.origin === 'block') return MSG_DECISION_NOT_FOUND;
   if (decision.accepted !== null) return MSG_ALREADY_ANSWERED;
   if (isDecisionExpired(decision.createdAt, deps.now(), deps.ttlHours)) {
     return resultReply(user.id, decision, MSG_DECISION_EXPIRED, deps);

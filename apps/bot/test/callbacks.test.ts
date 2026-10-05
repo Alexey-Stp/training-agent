@@ -3,6 +3,7 @@ import { Bot } from 'grammy';
 import type { Update, UserFromGetMe } from 'grammy/types';
 import {
   checkInData,
+  blockReviewData,
   coachDecisionData,
   MSG_DECISION_EXPIRED,
   seasonDecisionData,
@@ -191,6 +192,15 @@ describe('other buttons', () => {
     await tap(seasonDecisionData('save', 'draft1'));
 
     expect(jobs.map((j) => j.job.commandName)).toEqual(['season_confirm']);
+  });
+
+  it('routes a block review button past the coach TTL (the worker checks its own)', async () => {
+    now = new Date(SENT.getTime() + 48 * 3_600_000);
+
+    await tap(blockReviewData('confirm', 'run1'));
+
+    expect(jobs.map((j) => [j.job.commandName, j.job.args])).toEqual([['block_confirm', ['run1']]]);
+    expect(methods()).toEqual(['editMessageReplyMarkup', 'answerCallbackQuery']);
   });
 
   it('answers a tap on a message Telegram no longer has', async () => {

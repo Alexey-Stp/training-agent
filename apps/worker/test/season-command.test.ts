@@ -133,6 +133,8 @@ let deps: SeasonCommandDeps & { publish: ReturnType<typeof vi.fn> };
 function raceRepo(): RaceRepo {
   return {
     create: () => Promise.reject(new Error('not used')),
+    findByDate: () => Promise.reject(new Error('not used')),
+    moveDate: () => Promise.reject(new Error('not used')),
     listUpcoming: (_userId, fromDate) =>
       Promise.resolve(
         races.filter((r) => r.date >= fromDate).sort((a, b) => a.date.localeCompare(b.date))
@@ -183,7 +185,13 @@ describe('handleSeasonPreview', () => {
 
     expect(seasons.plans).toHaveLength(1);
     const [draft] = seasons.plans;
-    expect(draft).toMatchObject({ status: SeasonPlanStatus.draft, aRaceId: 'race-a' });
+    // The wizard's answers are kept for block-review re-projections
+    expect(draft).toMatchObject({
+      status: SeasonPlanStatus.draft,
+      aRaceId: 'race-a',
+      weeklyHoursAvailable: 10,
+      weakSport: 'bike',
+    });
     expect(reply.html).toBe(true);
     expect(reply.text).toContain('<pre>');
     expect(reply.text).toMatch(/# Type\s+Dates\s+Wk h\/wk Swim\s+Bike\s+Run/);

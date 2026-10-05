@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  blockReviewRaceMoveJobId,
   briefCron,
   checkInContinuationJobId,
   combineSchedulers,
+  createBlockReviewScheduler,
   createCheckInContinuation,
   createDailyBriefScheduler,
   createEveningCloseoutScheduler,
@@ -10,6 +12,7 @@ import {
   createWeeklyStatsScheduler,
   dailyBriefSchedulerId,
   eveningCloseoutSchedulerId,
+  reconcileBlockReviewSchedulers,
   reconcileDailyBriefSchedulers,
   reconcileEveningCloseoutSchedulers,
   reconcileWeeklyReviewSchedulers,
@@ -483,5 +486,63 @@ describe('reconcileWeeklyStatsSchedulers', () => {
     expect(scheduler.schedule).toHaveBeenCalledWith('moved');
     expect(scheduler.unschedule).toHaveBeenCalledTimes(1);
     expect(scheduler.unschedule).toHaveBeenCalledWith('gone');
+  });
+});
+
+describe('createBlockReviewScheduler', () => {
+  it('upserts a Sunday cron at BLOCK_REVIEW_TIME in the athlete timezone', async () => {
+    const queue = fakeQueue();
+    const scheduler = createBlockReviewScheduler(
+      queue as unknown as SchedulerQueue,
+      schedulerDeps({ u1: PRAGUE }, '19:30')
+    );
+
+    await scheduler.schedule('u1');
+
+    expect(queue.upsertJobScheduler).toHaveBeenCalledWith(
+      'block-review:u1',
+      { pattern: '30 19 * * 0', tz: 'Europe/Prague' },
+      expect.objectContaining({ name: 'block-review', data: { userId: 'u1' } })
+    );
+  });
+
+  it('removes the scheduler on unschedule', async () => {
+    const queue = fakeQueue();
+    const scheduler = createBlockReviewScheduler(
+      queue as unknown as SchedulerQueue,
+      schedulerDeps({}, '19:30')
+    );
+
+    await scheduler.unschedule('u1');
+
+    expect(queue.removeJobScheduler).toHaveBeenCalledWith('block-review:u1');
+  });
+
+  it('keys a race-move job by race and new date, without colons', () => {
+    const id = blockReviewRaceMoveJobId('u1', 'r1', '2026-11-29');
+    expect(id).toBe('block-review-race-u1-r1-2026-11-29');
+    expect(id).not.toContain(':');
+  });
+});
+
+describe('reconcileBlockReviewSchedulers', () => {
+  it('removes orphans and leaves the weekly review schedulers alone', async () => {
+    const queue = fakeQueue([
+      { key: 'block-review:ok', pattern: '30 19 * * 0', tz: 'Europe/Prague' },
+      { key: 'block-review:gone', pattern: '30 19 * * 0', tz: 'Europe/Prague' },
+      { key: 'weekly-review:gone', pattern: '0 19 * * 0', tz: 'Europe/Prague' },
+    ]);
+    const scheduler = fakeScheduler();
+
+    const result = await reconcileBlockReviewSchedulers(
+      queue as unknown as SchedulerQueue,
+      scheduler,
+      ['ok'],
+      schedulerDeps({ ok: PRAGUE }, '19:30')
+    );
+
+    expect(result).toEqual({ scheduled: 0, removed: 1 });
+    expect(scheduler.unschedule).toHaveBeenCalledWith('gone');
+    expect(scheduler.unschedule).toHaveBeenCalledTimes(1);
   });
 });
