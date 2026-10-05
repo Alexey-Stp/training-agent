@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@triathlon/core": "*",
-    "zod": "^4.3.6"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",
