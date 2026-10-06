@@ -28,6 +28,7 @@ model User {
   weeklyReviewRuns  WeeklyReviewRun[]
   blockReviewRuns   BlockReviewRun[]
   raceBriefRuns     RaceBriefRun[]
+  raceDebriefs      RaceDebrief[]
 
   @@index([telegramId])
 }
@@ -245,6 +246,7 @@ model Race {
   travelDate  String?      // YYYY-MM-DD; within T-3..T-1 it is a rest day in the race-week plan
   seasonPlans SeasonPlan[] @relation("ARace")
   briefRuns   RaceBriefRun[]
+  debriefs    RaceDebrief[]
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
@@ -585,4 +587,46 @@ model RaceBriefRun {
   updatedAt    DateTime        @updatedAt
 
   @@unique([userId, raceId, kind, raceDate])
+}
+
+enum RaceDebriefStatus {
+  pending
+  running
+  sent
+  skipped // no race activity synced within the timeout; the athlete was asked if they raced
+  failed
+}
+
+enum RaceDebriefTier {
+  power // a power stream
+  hr // heart rate and/or speed streams, no power
+  none // whole-activity averages only
+}
+
+// One post-race debrief per race and race date (apps/worker races/post-race.ts). Metrics are
+// computed in code (core race/debrief.ts); the LLM only writes the narrative and takeaways.
+model RaceDebrief {
+  id            String            @id @default(cuid())
+  userId        String
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  raceId        String
+  race          Race              @relation(fields: [raceId], references: [id], onDelete: Cascade)
+  raceDate      String // the race date this debrief was for (YYYY-MM-DD)
+  status        RaceDebriefStatus @default(pending)
+  startedAt     DateTime? // lease of the run in progress
+  activityIcuId String? // the race activity (longest of the race day)
+  tier          RaceDebriefTier?
+  metrics       Json              @default("{}") // RaceMetrics from core
+  narrative     String?
+  takeaways     Json              @default("[]") // the three takeaways
+  debriefText   String? // rendered message (Telegram HTML); a retry resends it
+  skippedReason String?
+  askedAt       DateTime? // the "did you race?" question went out
+  stageTimings  Json              @default("{}") // stage -> ms
+  error         String?
+  sentAt        DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@unique([userId, raceId, raceDate])
 }

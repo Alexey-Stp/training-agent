@@ -62,6 +62,8 @@ import type { CheckInRepo } from './daily-loop/checkin';
 import type { WeeklyStatsRepo } from './reviews/weekly-stats-store';
 import type { WeeklyReviewRun, WeeklyReviewRunRepo } from './reviews/weekly-review-store';
 import type { RaceBriefRun, RaceBriefRunRepo } from './races/race-brief-store';
+import type { RaceDebriefRun, RaceDebriefRunRepo } from './races/race-debrief-store';
+import type { RaceActivity } from './races/post-race';
 import type {
   BlockReviewRun,
   BlockReviewRunRepo,
@@ -1512,6 +1514,109 @@ export const raceBriefRunRepo: RaceBriefRunRepo = {
 
   async markFailed(id, error, stageTimings) {
     await prisma.raceBriefRun.update({
+      where: { id },
+      data: { status: 'failed', error, stageTimings: toJson(stageTimings) },
+    });
+  },
+};
+
+/** The activities of one local day, for the race debrief to pick the race from. */
+export const raceActivityRepo = {
+  async listByDate(userId: string, date: string): Promise<RaceActivity[]> {
+    const rows = await prisma.activity.findMany({
+      where: { userId, startDateLocal: date },
+      select: {
+        icuId: true,
+        sport: true,
+        startDateLocal: true,
+        durationSec: true,
+        distanceM: true,
+        avgHr: true,
+        avgPower: true,
+      },
+    });
+    return rows.map((row) => ({ ...row, sport: row.sport as Sport }));
+  },
+};
+
+export const raceDebriefRunRepo: RaceDebriefRunRepo = {
+  async claim({ userId, raceId, raceDate }, now, leaseMs) {
+    // skipDuplicates: the run may exist from an earlier trigger or attempt
+    await prisma.raceDebrief.createMany({
+      data: [{ userId, raceId, raceDate }],
+      skipDuplicates: true,
+    });
+    const where = { userId_raceId_raceDate: { userId, raceId, raceDate } };
+    // One conditional update takes the run over, so two concurrent triggers can't both win
+    const { count } = await prisma.raceDebrief.updateMany({
+      where: {
+        userId,
+        raceId,
+        raceDate,
+        OR: [
+          { status: { in: ['pending', 'failed'] } },
+          { status: 'running', startedAt: { lt: new Date(now.getTime() - leaseMs) } },
+        ],
+      },
+      data: { status: 'running', startedAt: now, error: null },
+    });
+    const row = await prisma.raceDebrief.findUniqueOrThrow({ where });
+    if (count > 0) {
+      const run: RaceDebriefRun = {
+        id: row.id,
+        status: row.status,
+        debriefText: row.debriefText,
+        stageTimings: row.stageTimings as StageTimings,
+      };
+      return { status: 'claimed', run };
+    }
+    return { status: row.status === 'running' ? 'in_progress' : 'already_done' };
+  },
+
+  async saveDebrief(id, input) {
+    await prisma.raceDebrief.update({
+      where: { id },
+      data: {
+        activityIcuId: input.activityIcuId,
+        tier: input.tier,
+        metrics: toJson(input.metrics),
+        narrative: input.narrative,
+        takeaways: toJson(input.takeaways),
+        debriefText: input.debriefText,
+        stageTimings: toJson(input.stageTimings),
+      },
+    });
+  },
+
+  async markSent(id, sentAt, stageTimings) {
+    await prisma.raceDebrief.update({
+      where: { id },
+      data: { status: 'sent', sentAt, error: null, stageTimings: toJson(stageTimings) },
+    });
+  },
+
+  async markSkipped(id, reason, askedAt, stageTimings) {
+    await prisma.raceDebrief.update({
+      where: { id },
+      data: {
+        status: 'skipped',
+        skippedReason: reason,
+        askedAt,
+        error: null,
+        stageTimings: toJson(stageTimings),
+      },
+    });
+  },
+
+  async release(id, stageTimings) {
+    await prisma.raceDebrief.update({
+      where: { id },
+      data: { status: 'pending', startedAt: null, stageTimings: toJson(stageTimings) },
+    });
+  },
+
+  async markFailed(id, error, stageTimings) {
+    await prisma.raceDebrief.update({
       where: { id },
       data: { status: 'failed', error, stageTimings: toJson(stageTimings) },
     });

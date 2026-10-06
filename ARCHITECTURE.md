@@ -763,6 +763,33 @@ runRaceBriefJob (apps/worker/src/races/race-brief.ts)
 - **Checklist** (core `race/checklist.ts`) per race type; `raceBriefKind` (core `race/brief.ts`) is the A vs B/C matrix.
 - **Storage.** Migration `9h_race_brief`: `RaceBriefRun` (unique `(userId, raceId, kind, raceDate)`, cascade on user and race), enums `RaceBriefKind`, `RaceBriefStatus`.
 
+### Post-race recovery and debrief (implemented)
+
+```
+post-race queue: one daily cron scheduler per linked athlete (same factory and reconcile as the race brief)
+  key post-race:<userId>, pattern from POST_RACE_TIME, tz Profile.timezone
+        │
+        ▼
+runPostRaceJob (apps/worker/src/races/post-race.ts)
+  today = local date; races dated today-14.. (raceRepo.listUpcoming)
+  1. recovery: recoveryWindows (day after the race, never before today, cut before the next race)
+       → core recoverySessions → toPlannedSessions → materializeRange → one pushPlannedSessions
+  2. debrief (races 1..3 days back): claim RaceDebrief (userId, raceId, raceDate)
+       stored debriefText? ─► resend (no LLM call)
+       activity sync (failure → stale) → core pickRaceActivity (race day, longest)
+       none: before the deadline (end of race day + RACE_DEBRIEF_TIMEOUT_HOURS) or stale → release, try again tomorrow
+             else log "race debrief skipped", ask "did you race?", markSkipped
+       found: ICU streams (failure → averages only) → core computeRaceMetrics vs buildPacingPlan(race date)
+              → ai runRaceDebrief (prompts/race-debrief-v1.md) → renderRaceDebrief → saveDebrief → send → markSent
+```
+
+- **Recovery** (core `season/race-recovery.ts`, pure, `DEFAULT_RECOVERY_CONFIG` in `BlockGeneratorConfig.recovery`). `recoveryDays(priority, type)` is the matrix, `recoverySessions` the rest-then-every-other-day Z1 pattern (tag `recovery`). `applyRaceOverrides` replaces everything in the window with those sessions after the race treatments, so season expansion produces the same days the job writes. The season ends in the race week, so after an A-race only the job writes them. `RACE_REACH_DAYS` is the longest block (14).
+- **Idempotency.** `materializeRange` diffs by `(date, slot)` and keeps protected rows (`modified_externally`, `completed`, `skipped`, coach changes); a second run writes and pushes nothing.
+- **Metrics** (core `race/debrief.ts`, pure, `DEFAULT_RACE_DEBRIEF_CONFIG`). Tiers: `power` (watts stream), `hr` (heart rate and/or speed stream), `none` (stored averages). NP = 30 s rolling average, 4th-power mean. Halves split at half the elapsed time; a second half more than 2% worse is `positive`, better `negative`, else `even`. HR drift is the loss of power (or speed) per heartbeat between halves, the raw HR rise without an output stream.
+- **Streams.** `IcuClient.getActivityStreams` (`GET /activity/:id/streams.json`, zod `StreamListSchema`); `races/race-streams.ts` maps them to core `RaceStreams`. Nothing is stored beyond the computed metrics.
+- **Digit rule.** `parseRaceDebriefText` needs a narrative, `---` and exactly three `- ` takeaways, and rejects any number not in the facts text.
+- **Storage.** Migration `9i_race_debrief`: `RaceDebrief` (unique `(userId, raceId, raceDate)`, lease via `startedAt`, `tier`, `metrics`/`takeaways` JSON, `debriefText`, `skippedReason`, `askedAt`, cascade on user and race), enums `RaceDebriefStatus`, `RaceDebriefTier`.
+
 ## Security Considerations
 
 ### Current Protections

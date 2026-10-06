@@ -36,6 +36,9 @@ export const WEEKLY_REVIEW_JOB = 'weekly-review';
 export const RACE_BRIEF_QUEUE = 'race-brief';
 export const RACE_BRIEF_JOB = 'race-brief';
 
+export const POST_RACE_QUEUE = 'post-race';
+export const POST_RACE_JOB = 'post-race';
+
 export const BLOCK_REVIEW_QUEUE = 'block-review';
 /** The Sunday scheduler's job: it reviews only when today is the last day of a block */
 export const BLOCK_REVIEW_JOB = 'block-review';
@@ -47,6 +50,10 @@ export const MONDAY = 1;
 export const SUNDAY = 0;
 
 export interface RaceBriefJob {
+  userId: string;
+}
+
+export interface PostRaceJob {
   userId: string;
 }
 
@@ -141,6 +148,17 @@ export function raceBriefRepeat(
 }
 
 /**
+ * The repeat options of an athlete's post-race scheduler: every day at POST_RACE_TIME. The job
+ * does nothing when no race lies within the recovery or debrief window.
+ */
+export function postRaceRepeat(
+  profile: BriefProfile,
+  time: string
+): { pattern: string; tz: string } {
+  return { pattern: briefCron(time), tz: profile.timezone };
+}
+
+/**
  * The repeat options of an athlete's block review scheduler: Sundays at BLOCK_REVIEW_TIME. Every
  * block ends on a Sunday; the job skips the Sundays that don't end one.
  */
@@ -190,6 +208,8 @@ const WEEKLY_REVIEW_SPEC: DailyCronSpec = {
 };
 
 const RACE_BRIEF_SPEC: DailyCronSpec = { jobName: RACE_BRIEF_JOB, repeat: raceBriefRepeat };
+
+const POST_RACE_SPEC: DailyCronSpec = { jobName: POST_RACE_JOB, repeat: postRaceRepeat };
 
 const BLOCK_REVIEW_SPEC: DailyCronSpec = {
   jobName: BLOCK_REVIEW_JOB,
@@ -264,6 +284,14 @@ export function createRaceBriefScheduler(
   deps: DailyBriefSchedulerDeps
 ): IcuSyncScheduler {
   return createDailyCronScheduler(queue, RACE_BRIEF_SPEC, deps);
+}
+
+/** The post-race scheduler: `post-race:<userId>` daily at the local POST_RACE_TIME; the job skips days without a recent race. */
+export function createPostRaceScheduler(
+  queue: CronQueue,
+  deps: DailyBriefSchedulerDeps
+): IcuSyncScheduler {
+  return createDailyCronScheduler(queue, POST_RACE_SPEC, deps);
 }
 
 /** The block review scheduler: `block-review:<userId>` on Sundays at the local BLOCK_REVIEW_TIME. */
@@ -421,6 +449,16 @@ export function reconcileRaceBriefSchedulers(
   deps: DailyBriefSchedulerDeps
 ): Promise<{ scheduled: number; removed: number }> {
   return reconcileDailyCronSchedulers(queue, RACE_BRIEF_SPEC, scheduler, connectedUserIds, deps);
+}
+
+/** Startup reconcile of the post-race schedulers. */
+export function reconcilePostRaceSchedulers(
+  queue: CronQueue,
+  scheduler: IcuSyncScheduler,
+  connectedUserIds: string[],
+  deps: DailyBriefSchedulerDeps
+): Promise<{ scheduled: number; removed: number }> {
+  return reconcileDailyCronSchedulers(queue, POST_RACE_SPEC, scheduler, connectedUserIds, deps);
 }
 
 /** Startup reconcile of the block review schedulers. */

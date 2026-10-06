@@ -13,6 +13,7 @@ export * from './block-generator';
 export * from './reproject';
 export * from './week-expander';
 export * from './race-week';
+export * from './race-recovery';
 export { isRampException } from './volume';
 export { weekVolumeFactor } from './season-weeks';
 export * from './window';
