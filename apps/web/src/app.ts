@@ -4,6 +4,7 @@ import { authRouter, type AuthDeps } from './auth/routes';
 import { securityHeaders, sendHtml } from './http';
 import { settingsRouter, type SettingsDeps } from './settings/routes';
 import { todayRouter, type TodayRouteDeps } from './today/routes';
+import { weekRouter } from './week/routes';
 import { renderNotFound } from './views/auth-pages';
 import { renderPage } from './views/layout';
 import { STYLESHEET, STYLESHEET_PATH } from './views/style';
@@ -29,6 +30,7 @@ export function createApp(deps: AppDeps): express.Express {
   app.use(express.urlencoded({ extended: false, limit: '16kb' }));
   app.use(authRouter(deps));
   app.use(todayRouter(deps, deps));
+  app.use(weekRouter(deps, deps));
   app.use(settingsRouter(deps, deps));
 
   app.use((_req, res) => {
