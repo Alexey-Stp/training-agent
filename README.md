@@ -625,6 +625,13 @@ npm run db:push
 # Create migration
 npm run db:migrate
 
+# Apply all migrations to an empty database, like CI does
+npm run db:deploy
+
+# Demo athlete with 30 days of wellness, activities and plan (safe to repeat)
+npm run db:seed
+npm run db:verify   # checks migrations, indexes and seed counts
+
 # Open Prisma Studio
 npm run db:studio
 ```

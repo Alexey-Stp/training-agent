@@ -210,7 +210,7 @@ jobs:
   summary:
     name: CI Summary
     runs-on: ubuntu-latest
-    needs: [lint-and-typecheck, test, build, docker-build, integration]
+    needs: [lint-and-typecheck, test, build, docker-build, integration, migrations]
     if: always()
 
     steps:
@@ -221,6 +221,7 @@ jobs:
           echo "Build: ${{ needs.build.result }}"
           echo "Docker Build: ${{ needs.docker-build.result }}"
           echo "Integration: ${{ needs.integration.result }}"
+          echo "Migrations: ${{ needs.migrations.result }}"
 
       - name: Fail if any job failed
         if: |
@@ -228,5 +229,6 @@ jobs:
           needs.test.result == 'failure' ||
           needs.build.result == 'failure' ||
           needs.docker-build.result == 'failure' ||
-          needs.integration.result == 'failure'
+          needs.integration.result == 'failure' ||
+          needs.migrations.result == 'failure'
         run: exit 1
