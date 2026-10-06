@@ -1,0 +1,5 @@
+[
+  { "type": "time", "name": "Time", "data": [0, 1, 2, 3, 4] },
+  { "type": "watts", "name": "Power", "data": [210, 215, null, 220, 225] },
+  { "type": "heartrate", "name": "Heart Rate", "data": [120, 122, 124, 125, 127] }
+]

@@ -201,8 +201,8 @@ It returns the `TrainingBlock[]` (weekly targets are the mean of the block's wee
 
 `expandWeek` applies the athlete's races to the draft before the rules engine runs (core `season/race-week.ts`, `applyRaceOverrides`). The race itself is one session `🏁 <name>` (Sport `other`, `run` for run races; duration estimate per race type: sprint 75, olympic 150, half 330, full 780, run 90, other 120 min). It is tagged `race`, it is not counted as week volume, and the rules never scale or downgrade it.
 
-- **A-race** (the season's): T-6..T-1 follow the race-week template of the race type, sized to the race week's training hours (40% of peak). Sprint/olympic/other: easy swim and run, bike sharpening at T-5, a 20′ easy spin at T-3, easy swim and run at T-2, a 30′ bike opener at T-1. Half/full: one moderate ride, run sharpening at T-5, full rest at T-3, easy swim and run at T-2, the T-1 opener. Run: run-only, with a 20′ jog at T-3. The opener is Z3 with 3 × 1′ race-pace touches, so no hard session sits after T-3. After the race, an optional 30′ Z1 session every other day to the end of the race's ISO week. A travel day in T-3..T-1 is a rest day; travelling at T-1 moves the opener to T-2. The window is date-based, so a taper week that holds T-6..T-1 of a Monday race gets them too. Race week keeps the taper's intensity count: sharpening + opener = 2.
-- **B-race**: a mini-taper inside the current block over the 3 (sprint/olympic/run/other), 4 (half) or 5 (full) days before the race. Sessions are cut to 60%; hard sessions stay as shortened sharpening until T-4 and go easy after that. T-3 becomes the shakeout or rest of the race type, T-1 the opener, and the day after the race is easy and ≤ 45 min. A B-race inside the A taper is swapped in like a C-race.
+- **A-race** (the season's): T-6..T-1 follow the race-week template of the race type, sized to the race week's training hours (40% of peak). Sprint/olympic/other: easy swim and run, bike sharpening at T-5, a 20′ easy spin at T-3, easy swim and run at T-2, a 30′ bike opener at T-1. Half/full: one moderate ride, run sharpening at T-5, full rest at T-3, easy swim and run at T-2, the T-1 opener. Run: run-only, with a 20′ jog at T-3. The opener is Z3 with 3 × 1′ race-pace touches, so no hard session sits after T-3. After the race, the recovery block (see Post-race recovery and debrief). A travel day in T-3..T-1 is a rest day; travelling at T-1 moves the opener to T-2. The window is date-based, so a taper week that holds T-6..T-1 of a Monday race gets them too. Race week keeps the taper's intensity count: sharpening + opener = 2.
+- **B-race**: a mini-taper inside the current block over the 3 (sprint/olympic/run/other), 4 (half) or 5 (full) days before the race. Sessions are cut to 60%; hard sessions stay as shortened sharpening until T-4 and go easy after that. T-3 becomes the shakeout or rest of the race type, T-1 the opener, and the days after the race are the recovery block (see Post-race recovery and debrief). A B-race inside the A taper is swapped in like a C-race.
 - **C-race**: train through. The race replaces the day's sessions, and when none of them was a key session (hard or long), the key session nearest the race is dropped instead. The other days keep their normal volume.
 
 Another A-race than the season's (e.g. one for next season) is treated as a B-race.
@@ -420,6 +420,17 @@ On race week the bot sends one or two messages per race at `RACE_BRIEF_TIME` (09
 - **Once per race and date** (`RaceBriefRun`): a retry resends the stored brief, and a race moved with `/race move` is briefed again for its new date. A failed activity sync only adds a stale note.
 
 All bands and ranges are in `DEFAULT_RACE_PACING_CONFIG`. Set `RACE_BRIEF_ENABLED=false` to turn it off.
+
+## Post-race recovery and debrief
+
+From the day after a race the bot runs one daily job at `POST_RACE_TIME` (09:30, your timezone):
+
+- **Recovery block.** Planned sessions in the block are replaced with rest or short Z1 sessions and pushed to intervals.icu. Length by priority and race type: **A** 7 days (sprint, olympic, other), 10 (half, run), 14 (full); **B** 2–4; **C** 0–2 (none after a sprint). The first days are full rest, then one easy session every other day. Sessions you moved, edited or completed yourself are kept, and a second run changes nothing. The season planner uses the same block, so the rolling publisher and `/plan` agree with it.
+- **Debrief.** When the race activity has synced (the longest activity of race day), the bot compares it with the T-1 targets. With power it reports normalized power against the bike band, the power of each half, the fade and the **positive or negative split**; with heart rate and speed only it reports pace by half and heart rate drift; with neither it compares the stored averages. A multisport activity gets no single target. The three takeaways and a short narrative come from the LLM, but **every number is computed in code**: a reply containing a figure that is not in the computed facts is replaced by a fixed text.
+- **No activity.** If nothing syncs within `RACE_DEBRIEF_TIMEOUT_HOURS` (48) after the end of race day, the debrief is skipped (logged) and the bot asks whether you raced. A failed intervals.icu sync never triggers that question.
+- **Once per race and date** (`RaceDebrief`): a retry resends the stored debrief.
+
+Streams (power, heart rate, speed) are fetched from intervals.icu when the debrief runs and are not stored. Set `POST_RACE_ENABLED=false` to turn the job off.
 
 ## intervals.icu Integration
 

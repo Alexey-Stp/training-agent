@@ -52,6 +52,8 @@ import {
   weeklyStatsRepo,
   weeklyReviewRunRepo,
   raceBriefRunRepo,
+  raceActivityRepo,
+  raceDebriefRunRepo,
   runEffortRepo,
   blockReviewRunRepo,
   seasonReprojectRepo,
@@ -114,6 +116,10 @@ import {
   createRaceBriefScheduler,
   reconcileRaceBriefSchedulers,
   type RaceBriefJob,
+  POST_RACE_QUEUE,
+  createPostRaceScheduler,
+  reconcilePostRaceSchedulers,
+  type PostRaceJob,
   combineSchedulers,
   createCheckInContinuation,
   createDailyBriefScheduler,
@@ -141,6 +147,8 @@ import { handleCheckInAnswer, type CheckInAnswerDeps } from './daily-loop/checki
 import { runWeeklyStats, type WeeklyStatsDeps } from './reviews/weekly-stats';
 import { runWeeklyReviewJob, type WeeklyReviewDeps } from './reviews/weekly-review';
 import { runRaceBriefJob, type RaceBriefDeps } from './races/race-brief';
+import { runPostRaceJob, type PostRaceDeps } from './races/post-race';
+import { fetchRaceStreams } from './races/race-streams';
 import {
   runBlockReviewJob,
   type BlockReviewDeps,
@@ -232,6 +240,16 @@ const raceBriefQueue = new Queue<RaceBriefJob>(RACE_BRIEF_QUEUE, {
   connection: redisConnection,
 });
 const raceBriefScheduler = createRaceBriefScheduler(raceBriefQueue, raceBriefSchedulerDeps);
+// Post-race: per linked athlete, one daily cron scheduler at the local POST_RACE_TIME; the job
+// replaces the sessions of a recovery block and debriefs the race activity
+const postRaceSchedulerDeps: DailyBriefSchedulerDeps = {
+  profiles: briefProfileRepo,
+  defaultTime: config.POST_RACE_TIME,
+};
+const postRaceQueue = new Queue<PostRaceJob>(POST_RACE_QUEUE, {
+  connection: redisConnection,
+});
+const postRaceScheduler = createPostRaceScheduler(postRaceQueue, postRaceSchedulerDeps);
 const weeklyGuardrailConfig: WeeklyGuardrailConfig = {
   ...DEFAULT_WEEKLY_GUARDRAIL_CONFIG,
   maxRamp: config.WEEKLY_REVIEW_MAX_RAMP_PCT / 100,
@@ -413,7 +431,8 @@ const icuConnectDeps: IcuConnectDeps = {
     ...(config.WEEKLY_STATS_ENABLED ? [weeklyStatsScheduler] : []),
     ...(config.WEEKLY_REVIEW_ENABLED ? [weeklyReviewScheduler] : []),
     ...(config.BLOCK_REVIEW_ENABLED ? [blockReviewScheduler] : []),
-    ...(config.RACE_BRIEF_ENABLED ? [raceBriefScheduler] : [])
+    ...(config.RACE_BRIEF_ENABLED ? [raceBriefScheduler] : []),
+    ...(config.POST_RACE_ENABLED ? [postRaceScheduler] : [])
   ),
   onSchedulerError: (error, userId) => {
     logger.error({ error, userId }, 'Failed to update intervals.icu sync schedule');
@@ -905,6 +924,48 @@ raceBriefWorker?.on('error', (err) => {
   logger.error({ error: err }, 'Race brief worker error');
 });
 
+const postRaceDeps: PostRaceDeps = {
+  runs: raceDebriefRunRepo,
+  profiles: briefProfileRepo,
+  races: raceRepo,
+  store: planStoreDeps,
+  push: planPushCommandDeps.push,
+  activities: raceActivityRepo,
+  getFtp: async (userId) => (await profileRepo.findProfile(userId))?.ftp ?? null,
+  runEfforts: runEffortRepo,
+  syncActivities: (userId) => syncActivities(userId, activitySyncDeps),
+  getStreams: (userId, activityIcuId) =>
+    fetchRaceStreams(userId, activityIcuId, {
+      findConnection: (id) => activityRepo.findConnection(id),
+      keys: encKeys,
+      createClient: (athleteId, apiKey) => new IcuClient({ athleteId, apiKey }),
+    }),
+  provider: llmProvider,
+  sendMessage: (chatId, text, options) => api.sendMessage(chatId, text, options),
+  debriefTimeoutHours: config.RACE_DEBRIEF_TIMEOUT_HOURS,
+  logger,
+  now: () => new Date(),
+};
+
+const postRaceWorker = config.POST_RACE_ENABLED
+  ? new Worker<PostRaceJob>(
+      POST_RACE_QUEUE,
+      (job: Job<PostRaceJob>) => runPostRaceJob(job.data.userId, postRaceDeps),
+      { connection: redisConnection, concurrency: 2 }
+    )
+  : null;
+
+postRaceWorker?.on('failed', (job, err) => {
+  logger.error(
+    { jobId: job?.id, userId: job?.data.userId, attempt: job?.attemptsMade, error: err },
+    'Post-race failed'
+  );
+});
+
+postRaceWorker?.on('error', (err) => {
+  logger.error({ error: err }, 'Post-race worker error');
+});
+
 const blockReviewDeps: BlockReviewDeps = {
   runs: blockReviewRunRepo,
   profiles: briefProfileRepo,
@@ -987,6 +1048,13 @@ async function startIcuSync() {
     raceBriefSchedulerDeps
   );
   logger.info(raceBrief, 'Race brief schedules reconciled');
+  const postRace = await reconcilePostRaceSchedulers(
+    postRaceQueue,
+    postRaceScheduler,
+    config.POST_RACE_ENABLED ? userIds : [],
+    postRaceSchedulerDeps
+  );
+  logger.info(postRace, 'Post-race schedules reconciled');
 }
 
 startIcuSync().catch((error: unknown) => {
@@ -1007,6 +1075,7 @@ async function shutdown() {
     weeklyReviewWorker?.close(),
     blockReviewWorker?.close(),
     raceBriefWorker?.close(),
+    postRaceWorker?.close(),
   ]);
   await Promise.all([
     syncQueue.close(),
@@ -1016,6 +1085,7 @@ async function shutdown() {
     weeklyReviewQueue.close(),
     blockReviewQueue.close(),
     raceBriefQueue.close(),
+    postRaceQueue.close(),
   ]);
   redis.disconnect();
   await prisma.$disconnect();

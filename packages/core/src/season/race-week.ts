@@ -1,4 +1,4 @@
-import { addDays, differenceInCalendarDays, endOfISOWeek, format, parseISO } from 'date-fns';
+import { addDays, differenceInCalendarDays, format, parseISO } from 'date-fns';
 import {
   downgradeToEasy,
   Intensity,
@@ -12,29 +12,23 @@ import {
   TAPER_TAG,
 } from '../types';
 import { BlockGeneratorConfig } from './generator-config';
+import { maxRecoveryDays, recoverySessions, recoveryWindow } from './race-recovery';
 import { Race, RacePriority, RaceType, TrainingBlockType } from './types';
 
 const STEP_MIN = 5;
 const MIN_SESSION_MIN = 20;
-/** Easy cap on the day after a B-race */
-const POST_RACE_MAX_MIN = 45;
-const RECOVERY_SPIN_MIN = 30;
 /** First day of the A-race window, relative to the race */
 const A_WINDOW_START = -6;
 /**
- * Most days a race reaches from its date: the A-race window starts 6 days before and ends with
- * its ISO week, a B-race mini-taper starts up to 5 days before. Callers load races this far
- * past both ends of a range.
+ * Most days a race reaches from its date: the A-race window starts 6 days before, a B-race
+ * mini-taper up to 5 days before, and the recovery block ends up to `maxRecoveryDays` after.
+ * Callers load races this far past both ends of a range.
  */
-export const RACE_REACH_DAYS = 7;
+export const RACE_REACH_DAYS = Math.max(7, maxRecoveryDays());
 
 // Local copy of window.ts addDaysIso: window imports the expander, which imports this file
 function addDaysIso(date: string, days: number): string {
   return format(addDays(parseISO(date), days), 'yyyy-MM-dd');
-}
-
-function isoWeekEnd(date: string): string {
-  return format(endOfISOWeek(parseISO(date)), 'yyyy-MM-dd');
 }
 
 /** One session of the A-race week, placed `offset` days from the race (negative = before). */
@@ -145,9 +139,6 @@ export const RACE_WEEK_TEMPLATES: Record<RaceType, readonly RaceDayEntry[]> = {
   [RaceType.other]: SHORT_TRI_WEEK,
 };
 
-/** Optional easy sessions after the race, on these offsets within the race's ISO week */
-const RECOVERY_OFFSETS: ReadonlySet<number> = new Set([2, 4, 6]);
-
 /** The race itself: one session, excluded from week volume and never changed by the rules. */
 export function raceSession(race: Race, config: BlockGeneratorConfig): Session {
   return {
@@ -242,23 +233,10 @@ function entrySession(race: Race, entry: RaceDayEntry, durationMin: number): Ses
   };
 }
 
-function recoverySession(race: Race, date: string): Session {
-  const sport = race.type === RaceType.run ? Sport.run : Sport.bike;
-  return {
-    date,
-    sport,
-    title: sport === Sport.bike ? 'Recovery Spin (optional)' : 'Recovery Jog (optional)',
-    durationMin: sport === Sport.bike ? RECOVERY_SPIN_MIN : MIN_SESSION_MIN,
-    intensity: Intensity.z1,
-    notes: 'Only if the legs ask for it',
-    tags: ['optional', TAPER_TAG],
-  };
-}
-
 /**
  * Every session of the A-race window: T-6..T-1 from the race type's template (sized to
- * `weekHours`, the race week's training volume), the race at T, and optional recovery after it
- * until the end of the race's ISO week. Pure and date-based, so a week that only holds part of
+ * `weekHours`, the race week's training volume) and the race at T. The recovery block after it
+ * is `applyRecovery`. Pure and date-based, so a week that only holds part of
  * the window (a taper week before a Monday race) gets the same sessions.
  */
 export function aRaceWindow(
@@ -271,15 +249,10 @@ export function aRaceWindow(
   const training = entries
     .map((e, i) => entrySession(race, e, minutes[i]))
     .filter((s) => s.durationMin > 0);
-  const to = isoWeekEnd(race.date);
-  const recovery: Session[] = [];
-  for (let date = addDaysIso(race.date, 1); date <= to; date = addDaysIso(date, 1)) {
-    if (RECOVERY_OFFSETS.has(offsetOf(race, date))) recovery.push(recoverySession(race, date));
-  }
   return {
     from: addDaysIso(race.date, A_WINDOW_START),
-    to,
-    sessions: [...training, raceSession(race, config), ...recovery],
+    to: race.date,
+    sessions: [...training, raceSession(race, config)],
   };
 }
 
@@ -300,15 +273,6 @@ function miniTaperSession(
   config: BlockGeneratorConfig
 ): Session | null {
   if (offset === -3 || offset === -1 || offset === 0) return null; // replaced, see miniTaperExtras
-  if (offset === 1) {
-    const easyDay = isHardSession(session)
-      ? downgradeToEasy(session, 'Day after a B-race')
-      : session;
-    return withTag(
-      { ...easyDay, durationMin: Math.min(easyDay.durationMin, POST_RACE_MAX_MIN) },
-      TAPER_TAG
-    );
-  }
   const shorter = scaled(session, config.miniTaperFactor);
   if (!isHardSession(shorter)) return withTag(shorter, TAPER_TAG);
   // Hard sessions stay until T-4 as shortened sharpening; closer to the race they go easy
@@ -345,7 +309,7 @@ function applyARace(
 
 function applyBRace(sessions: Session[], race: Race, config: BlockGeneratorConfig): Session[] {
   const from = addDaysIso(race.date, -config.miniTaperDays[race.type]);
-  const to = addDaysIso(race.date, 1);
+  const to = race.date;
   const changed = sessions.flatMap((s) => {
     if (!inRange(s.date, from, to)) return [s];
     const next = miniTaperSession(s, offsetOf(race, s.date), config);
@@ -403,15 +367,43 @@ function treatmentOf(race: Race, input: RaceOverrideInput): RaceTreatment {
   return 'c';
 }
 
-/** Days a race can change, relative to the race date. */
+/** Recovery block of a race, or null: none when empty, or for a race swapped into an A taper. */
+function recoveryOf(
+  race: Race,
+  treatment: RaceTreatment,
+  input: RaceOverrideInput
+): { from: string; to: string } | null {
+  if (treatment === 'c' && race.priority !== RacePriority.A && TAPER_BLOCKS.has(input.blockType)) {
+    return null;
+  }
+  return recoveryWindow(race, input.config.recovery);
+}
+
+/**
+ * Replaces everything in the recovery block with its easy sessions. Race sessions stay (another
+ * race inside the block), and no recovery session lands on a race day.
+ */
+function applyRecovery(
+  sessions: Session[],
+  race: Race,
+  window: { from: string; to: string },
+  config: BlockGeneratorConfig
+): Session[] {
+  const kept = sessions.filter((s) => !inRange(s.date, window.from, window.to) || isRaceSession(s));
+  const raceDays = new Set(kept.filter(isRaceSession).map((s) => s.date));
+  const recovery = recoverySessions(race, config.recovery).filter((s) => !raceDays.has(s.date));
+  return [...kept, ...recovery];
+}
+
+/** Days a race can change before its date, relative to the race date. */
 function reachOf(race: Race, treatment: RaceTreatment, config: BlockGeneratorConfig) {
   if (treatment === 'a') {
-    return { from: addDaysIso(race.date, A_WINDOW_START), to: isoWeekEnd(race.date) };
+    return { from: addDaysIso(race.date, A_WINDOW_START), to: race.date };
   }
   if (treatment === 'b') {
     return {
       from: addDaysIso(race.date, -config.miniTaperDays[race.type]),
-      to: addDaysIso(race.date, 1),
+      to: race.date,
     };
   }
   return { from: race.date, to: race.date };
@@ -419,7 +411,7 @@ function reachOf(race: Race, treatment: RaceTreatment, config: BlockGeneratorCon
 
 /**
  * The week's sessions with the races applied, before the rules engine runs: an A-race gets its
- * race-week template (T-6 to the end of its ISO week), a B-race a mini-taper, a C-race a swap.
+ * race-week template (T-6 to the race), a B-race a mini-taper, a C-race a swap, and every race the easy recovery block after it.
  * Only sessions dated inside the week are returned. Races apply A first, then B, then C.
  */
 export function applyRaceOverrides(sessions: Session[], input: RaceOverrideInput): Session[] {
@@ -428,7 +420,9 @@ export function applyRaceOverrides(sessions: Session[], input: RaceOverrideInput
     .map((race) => ({ race, treatment: treatmentOf(race, input) }))
     .filter(({ race, treatment }) => {
       const reach = reachOf(race, treatment, input.config);
-      return reach.from <= input.weekEnd && reach.to >= input.weekStart;
+      const recovery = recoveryOf(race, treatment, input);
+      const to = recovery && recovery.to > reach.to ? recovery.to : reach.to;
+      return reach.from <= input.weekEnd && to >= input.weekStart;
     })
     .sort(
       (a, b) => order[a.treatment] - order[b.treatment] || a.race.date.localeCompare(b.race.date)
@@ -443,6 +437,10 @@ export function applyRaceOverrides(sessions: Session[], input: RaceOverrideInput
     } else if (inRange(race.date, input.weekStart, input.weekEnd)) {
       result = applyCRace(result, race, input.config);
     }
+  }
+  for (const { race, treatment } of planned) {
+    const window = recoveryOf(race, treatment, input);
+    if (window) result = applyRecovery(result, race, window, input.config);
   }
   return result
     .filter((s) => inRange(s.date, input.weekStart, input.weekEnd))

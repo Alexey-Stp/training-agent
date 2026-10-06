@@ -37,6 +37,21 @@ export type Activity = z.infer<typeof ActivitySchema>;
 export const ActivityListSchema = z.array(ActivitySchema);
 export type ActivityList = z.infer<typeof ActivityListSchema>;
 
+// ── Streams ───────────────────────────────────────────────────────────────────
+
+/** One stream of an activity, e.g. `watts`, `heartrate`, `time`, `velocity_smooth`; null = gap. */
+export const StreamSchema = z
+  .object({
+    type: z.string(),
+    data: z.array(z.number().nullable()),
+  })
+  .passthrough();
+
+export type Stream = z.infer<typeof StreamSchema>;
+
+export const StreamListSchema = z.array(StreamSchema);
+export type StreamList = z.infer<typeof StreamListSchema>;
+
 // ── Wellness ──────────────────────────────────────────────────────────────────
 
 export const WellnessSchema = z

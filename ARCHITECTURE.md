@@ -237,7 +237,7 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 
 **Migrations**: `prisma/migrations/` starts with `0_init` (baseline of the pre-TA-9 schema), followed by `1_icu_connection`, `2_activity`, `3_wellness` (creates `Wellness`, copies `Fatigue.readiness` → `subjectiveReadiness` and `Fatigue.sleepScore` → `sleepScore`, then drops `Fatigue`, all in one transaction), `4_planned_session` and `5_season_plan`. Apply with `npm run db:deploy`. A database created earlier with `db push` must be baselined once: `npx prisma migrate resolve --applied 0_init`, then `npm run db:deploy`.
 
-**Migration series (TA-50)**: the folders apply in name order (`0_init` … `9a` … `9h`), which is a string sort, so there is no `10_…`: it would run before `2_…`. Pick the next letter suffix (`9i_…`) instead. `Fatigue` was folded into `Wellness` by `3_wellness` and no longer exists. Three pieces guard the series:
+**Migration series (TA-50)**: the folders apply in name order (`0_init` … `9a` … `9i`), which is a string sort, so there is no `10_…`: it would run before `2_…`. Pick the next letter suffix (`9j_…`) instead. `Fatigue` was folded into `Wellness` by `3_wellness` and no longer exists. Three pieces guard the series:
 
 - `apps/worker/test/schema-migration-set.test.ts` (PGlite): a fresh deploy creates a table for every model, a legacy DB with `Fatigue` rows upgrades through every later migration with equal row counts, and the index list in `scripts/db-expectations.ts` holds.
 - The CI `migrations` job runs `prisma migrate deploy` on an empty Postgres, `prisma migrate diff --exit-code` (schema.prisma must have no change that lacks a migration), `npm run db:seed` and `npm run db:verify` (`scripts/verify-db.ts`: all migrations finished, tables, indexes, seed counts).
@@ -768,6 +768,33 @@ runRaceBriefJob (apps/worker/src/races/race-brief.ts)
 - **Pacing** (core `race/pacing.ts`, pure). `bikeTarget` = FTP × the race type's % band, rounded to watts. `estimateRunThreshold` takes the fastest run of 20–60 min within 90 days (`Activity.distanceM` and `durationSec`; whole-run averages, so it is a proxy) and `runTarget` applies a per-type factor with a ±2% band; no qualifying run gives `null` and the brief says so. `fuelingPlan` and `swimNote` are per type. Everything is in `DEFAULT_RACE_PACING_CONFIG`.
 - **Checklist** (core `race/checklist.ts`) per race type; `raceBriefKind` (core `race/brief.ts`) is the A vs B/C matrix.
 - **Storage.** Migration `9h_race_brief`: `RaceBriefRun` (unique `(userId, raceId, kind, raceDate)`, cascade on user and race), enums `RaceBriefKind`, `RaceBriefStatus`.
+
+### Post-race recovery and debrief (implemented)
+
+```
+post-race queue: one daily cron scheduler per linked athlete (same factory and reconcile as the race brief)
+  key post-race:<userId>, pattern from POST_RACE_TIME, tz Profile.timezone
+        │
+        ▼
+runPostRaceJob (apps/worker/src/races/post-race.ts)
+  today = local date; races dated today-14.. (raceRepo.listUpcoming)
+  1. recovery: recoveryWindows (day after the race, never before today, cut before the next race)
+       → core recoverySessions → toPlannedSessions → materializeRange → one pushPlannedSessions
+  2. debrief (races 1..3 days back): claim RaceDebrief (userId, raceId, raceDate)
+       stored debriefText? ─► resend (no LLM call)
+       activity sync (failure → stale) → core pickRaceActivity (race day, longest)
+       none: before the deadline (end of race day + RACE_DEBRIEF_TIMEOUT_HOURS) or stale → release, try again tomorrow
+             else log "race debrief skipped", ask "did you race?", markSkipped
+       found: ICU streams (failure → averages only) → core computeRaceMetrics vs buildPacingPlan(race date)
+              → ai runRaceDebrief (prompts/race-debrief-v1.md) → renderRaceDebrief → saveDebrief → send → markSent
+```
+
+- **Recovery** (core `season/race-recovery.ts`, pure, `DEFAULT_RECOVERY_CONFIG` in `BlockGeneratorConfig.recovery`). `recoveryDays(priority, type)` is the matrix, `recoverySessions` the rest-then-every-other-day Z1 pattern (tag `recovery`). `applyRaceOverrides` replaces everything in the window with those sessions after the race treatments, so season expansion produces the same days the job writes. The season ends in the race week, so after an A-race only the job writes them. `RACE_REACH_DAYS` is the longest block (14).
+- **Idempotency.** `materializeRange` diffs by `(date, slot)` and keeps protected rows (`modified_externally`, `completed`, `skipped`, coach changes); a second run writes and pushes nothing.
+- **Metrics** (core `race/debrief.ts`, pure, `DEFAULT_RACE_DEBRIEF_CONFIG`). Tiers: `power` (watts stream), `hr` (heart rate and/or speed stream), `none` (stored averages). NP = 30 s rolling average, 4th-power mean. Halves split at half the elapsed time; a second half more than 2% worse is `positive`, better `negative`, else `even`. HR drift is the loss of power (or speed) per heartbeat between halves, the raw HR rise without an output stream.
+- **Streams.** `IcuClient.getActivityStreams` (`GET /activity/:id/streams.json`, zod `StreamListSchema`); `races/race-streams.ts` maps them to core `RaceStreams`. Nothing is stored beyond the computed metrics.
+- **Digit rule.** `parseRaceDebriefText` needs a narrative, `---` and exactly three `- ` takeaways, and rejects any number not in the facts text.
+- **Storage.** Migration `9i_race_debrief`: `RaceDebrief` (unique `(userId, raceId, raceDate)`, lease via `startedAt`, `tier`, `metrics`/`takeaways` JSON, `debriefText`, `skippedReason`, `askedAt`, cascade on user and race), enums `RaceDebriefStatus`, `RaceDebriefTier`.
 
 ## Security Considerations
 

@@ -4,7 +4,7 @@ import type { PGlite } from '@electric-sql/pglite';
 
 // Helpers for tests that run the real Prisma migration SQL in an in-process Postgres (PGlite)
 export const PRISMA_DIR = path.resolve(__dirname, '../../../prisma');
-const MIGRATIONS_DIR = path.join(PRISMA_DIR, 'migrations');
+export const MIGRATIONS_DIR = path.join(PRISMA_DIR, 'migrations');
 
 /** Migration folder names in Prisma's apply order (lexicographic). */
 export function migrationNames(): string[] {
@@ -12,6 +12,11 @@ export function migrationNames(): string[] {
     .filter((e) => e.isDirectory())
     .map((e) => e.name)
     .sort((a, b) => a.localeCompare(b));
+}
+
+/** Migration folder names in Prisma's apply order, up to and including `name`. */
+export function migrationsUpTo(name: string): string[] {
+  return migrationNames().filter((n) => n.localeCompare(name) <= 0);
 }
 
 export function migrationSql(name: string): string {

@@ -12,6 +12,7 @@ import activitiesFixture from './fixtures/activities.json';
 import wellnessFixture from './fixtures/wellness.json';
 import eventsFixture from './fixtures/events.json';
 import workoutEventFixture from './fixtures/workout-event.json';
+import streamsFixture from './fixtures/activity-streams.json';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -81,6 +82,41 @@ describe('IcuClient.listActivities', () => {
 
     expect(result).toHaveLength(activitiesFixture.length);
     expect(mockFetch).toHaveBeenCalledTimes(2); // 1 failed + 1 successful
+  });
+});
+
+// ── getActivityStreams ────────────────────────────────────────────────────────
+
+describe('IcuClient.getActivityStreams', () => {
+  it('happy path: returns the requested streams, gaps as null', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse(streamsFixture));
+    const client = new IcuClient({ ...BASE_CONFIG, fetch: mockFetch });
+
+    const result = await client.getActivityStreams('i987', ['time', 'watts', 'heartrate']);
+
+    expect(result.map((s) => s.type)).toEqual(['time', 'watts', 'heartrate']);
+    expect(result[1].data).toEqual([210, 215, null, 220, 225]);
+    const [url] = mockFetch.mock.calls[0] as [string];
+    expect(url).toContain('/activity/i987/streams.json');
+    expect(url).toContain('types=time%2Cwatts%2Cheartrate');
+  });
+
+  it('404 throws IcuHttpError without retrying', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse(null, 404));
+    const client = new IcuClient({ ...BASE_CONFIG, fetch: mockFetch });
+
+    const err = await client.getActivityStreams('i987').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(IcuHttpError);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('object instead of array: throws IcuContractError', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(jsonResponse({ watts: [1] }));
+    const client = new IcuClient({ ...BASE_CONFIG, fetch: mockFetch });
+
+    const err = await client.getActivityStreams('i987').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(IcuContractError);
+    expect((err as IcuContractError).endpoint).toBe('GET /activity/:id/streams');
   });
 });
 
