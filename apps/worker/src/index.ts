@@ -13,11 +13,18 @@ import {
   COACH_KEEP_COMMAND,
   getConfig,
   getEncKeys,
+  PROFILE_SETTINGS_QUEUE,
   SEASON_CANCEL_COMMAND,
   SEASON_CONFIRM_COMMAND,
   SEASON_PREVIEW_COMMAND,
 } from '@triathlon/core';
-import type { BlockReviewAnswer, CoachAnswer, CommandJob, IcuSyncJob } from '@triathlon/core';
+import type {
+  BlockReviewAnswer,
+  CoachAnswer,
+  CommandJob,
+  IcuSyncJob,
+  ProfileRescheduleJob,
+} from '@triathlon/core';
 import { IcuClient } from '@triathlon/integrations-icu';
 import {
   createLlmProvider,
@@ -71,6 +78,7 @@ import {
 } from './handlers';
 import { handleWeekShow, MSG_WEEK_USAGE, type WeekShowDeps } from './week-command';
 import { handleDashboard, type DashboardCommandDeps } from './dashboard-command';
+import { processProfileReschedule } from './profile-reschedule';
 import {
   handleConnectIcu,
   handleConnectStatus,
@@ -448,20 +456,23 @@ const coachAnswerDeps: CoachAnswerDeps = {
   now: () => new Date(),
 };
 
+// Every per-connection scheduler: registered on /connect icu and after a dashboard settings change
+const athleteSchedulers = combineSchedulers(
+  icuSyncScheduler,
+  ...(config.DAILY_BRIEF_ENABLED ? [dailyBriefScheduler] : []),
+  ...(config.EVENING_CLOSEOUT_ENABLED ? [closeoutScheduler] : []),
+  ...(config.WEEKLY_STATS_ENABLED ? [weeklyStatsScheduler] : []),
+  ...(config.WEEKLY_REVIEW_ENABLED ? [weeklyReviewScheduler] : []),
+  ...(config.BLOCK_REVIEW_ENABLED ? [blockReviewScheduler] : []),
+  ...(config.RACE_BRIEF_ENABLED ? [raceBriefScheduler] : []),
+  ...(config.POST_RACE_ENABLED ? [postRaceScheduler] : [])
+);
+
 const icuConnectDeps: IcuConnectDeps = {
   repo: icuConnectionRepo,
   keys: encKeys,
   createClient: (athleteId, apiKey) => new IcuClient({ athleteId, apiKey }),
-  scheduler: combineSchedulers(
-    icuSyncScheduler,
-    ...(config.DAILY_BRIEF_ENABLED ? [dailyBriefScheduler] : []),
-    ...(config.EVENING_CLOSEOUT_ENABLED ? [closeoutScheduler] : []),
-    ...(config.WEEKLY_STATS_ENABLED ? [weeklyStatsScheduler] : []),
-    ...(config.WEEKLY_REVIEW_ENABLED ? [weeklyReviewScheduler] : []),
-    ...(config.BLOCK_REVIEW_ENABLED ? [blockReviewScheduler] : []),
-    ...(config.RACE_BRIEF_ENABLED ? [raceBriefScheduler] : []),
-    ...(config.POST_RACE_ENABLED ? [postRaceScheduler] : [])
-  ),
+  scheduler: athleteSchedulers,
   onSchedulerError: (error, userId) => {
     logger.error({ error, userId }, 'Failed to update intervals.icu sync schedule');
   },
@@ -1011,6 +1022,31 @@ if (blockReviewWorker) {
   });
 }
 
+const profileSettingsQueue = new Queue<ProfileRescheduleJob>(PROFILE_SETTINGS_QUEUE, {
+  connection: redisConnection,
+});
+
+// Dashboard settings changes (TA-54): re-register the athlete's schedulers
+const profileSettingsWorker = new Worker<ProfileRescheduleJob>(
+  PROFILE_SETTINGS_QUEUE,
+  async (job: Job<ProfileRescheduleJob>) => {
+    const result = await processProfileReschedule(job.data, {
+      connections: icuConnectionRepo,
+      scheduler: athleteSchedulers,
+    });
+    logger.info({ jobId: job.id, userId: job.data.userId, ...result }, 'Profile settings applied');
+    return result;
+  },
+  { connection: redisConnection, concurrency: 2 }
+);
+
+instrumentWorker(profileSettingsWorker, {
+  queue: PROFILE_SETTINGS_QUEUE,
+  label: 'Profile settings',
+  logger,
+  metrics,
+});
+
 const registryQueues = {
   [ICU_SYNC_QUEUE]: syncQueue,
   [DAILY_BRIEF_QUEUE]: briefQueue,
@@ -1020,6 +1056,7 @@ const registryQueues = {
   [BLOCK_REVIEW_QUEUE]: blockReviewQueue,
   [RACE_BRIEF_QUEUE]: raceBriefQueue,
   [POST_RACE_QUEUE]: postRaceQueue,
+  [PROFILE_SETTINGS_QUEUE]: profileSettingsQueue,
 };
 
 const servers: Server[] = [];
@@ -1127,6 +1164,7 @@ async function shutdown() {
     blockReviewWorker?.close(),
     raceBriefWorker?.close(),
     postRaceWorker?.close(),
+    profileSettingsWorker.close(),
   ]);
   await Promise.all(servers.map((server) => closeServer(server)));
   await Promise.all([
@@ -1139,6 +1177,7 @@ async function shutdown() {
     blockReviewQueue.close(),
     raceBriefQueue.close(),
     postRaceQueue.close(),
+    profileSettingsQueue.close(),
   ]);
   redis.disconnect();
   await prisma.$disconnect();

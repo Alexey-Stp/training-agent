@@ -4,6 +4,7 @@ export * from './plan-generator';
 export * from './rules-engine';
 export * from './crypto';
 export * from './magic-link';
+export * from './profile-settings';
 export * from './logger';
 export * from './workout';
 export * from './planned-session';

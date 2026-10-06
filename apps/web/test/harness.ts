@@ -3,6 +3,8 @@ import type { Server } from 'node:http';
 import { signMagicLink } from '@triathlon/core';
 import { createApp, type AppDeps } from '../src/app';
 import { newSessionId, type SessionStore, type WebSession } from '../src/auth/session-store';
+import type { SettingsRepo, SettingsView } from '../src/settings/store';
+import type { ProfileSettings } from '../src/settings/validate';
 
 export const SECRET = 'test-secret-'.padEnd(40, 'x');
 export const NOW = new Date('2026-10-06T08:00:00Z');
@@ -77,6 +79,9 @@ export async function startApp(
     logger,
     sessions,
     users: { exists: (id) => Promise.resolve(known.has(id)) },
+    settings: new MemorySettingsRepo(),
+    chats: { verify: () => Promise.resolve({ ok: true }) },
+    events: { changed: () => Promise.resolve() },
     linkSecret: SECRET,
     sessionTtlHours: 24,
     secureCookies: false,
@@ -131,4 +136,39 @@ export function post(
     headers: { 'content-type': 'application/x-www-form-urlencoded', ...(cookie ? { cookie } : {}) },
     body,
   });
+}
+
+export function defaultSettings(telegramId: string): SettingsView {
+  return {
+    ftp: 355,
+    lthr: null,
+    timezone: 'Europe/Prague',
+    briefTime: null,
+    closeoutTime: null,
+    swimDays: ['Wed', 'Fri', 'Sun_optional'],
+    bikeVo2Day: 'Thu',
+    longBikeDay: 'Sun',
+    noLongRunDay: 'Sun',
+    notifyChatId: null,
+    telegramId,
+  };
+}
+
+/** Profiles by userId; `writes` counts every save (the read-only checks assert on it). */
+export class MemorySettingsRepo implements SettingsRepo {
+  readonly profiles = new Map<string, SettingsView>();
+  writes = 0;
+
+  load(userId: string): Promise<SettingsView | null> {
+    const p = this.profiles.get(userId);
+    return Promise.resolve(p ? { ...p, swimDays: [...p.swimDays] } : null);
+  }
+
+  save(userId: string, settings: ProfileSettings): Promise<void> {
+    const current = this.profiles.get(userId);
+    if (!current) return Promise.reject(new Error('no profile'));
+    this.writes += 1;
+    this.profiles.set(userId, { ...current, ...settings });
+    return Promise.resolve();
+  }
 }

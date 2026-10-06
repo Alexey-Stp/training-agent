@@ -138,6 +138,11 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 - `auth/guard.ts` - `requireSession` (session cookie → Redis session → user exists, else a 401 page plus a `dashboard auth rejected` warning) and `requireCsrf`
 - `auth/session-store.ts` - `RedisSessionStore`: `web:session:<id>` holds `{userId, csrf}` with a TTL, and `web:link:<jti>` (`SET NX`) is the one-time-use guard
 - `views/` - HTML templates (plain functions, `esc()` for every dynamic value) and the single hashed stylesheet
+- `settings/` - the Settings page: `validate.ts` (pure server-side validation of every field), `routes.ts` (GET, and POST with CSRF; 400 with field errors, or save then 303 `?saved=1`), `view.ts`. Adapters: `db.ts` `createSettingsRepo` (the app's only write: `Profile` by `userId`), `telegram.ts` (a new notification chat must pass `getChat` and a test message before it is saved), and `queue.ts` (queues `profile-reschedule` on `profile-settings`)
+
+**Settings changes reach the schedulers** through the worker. `profile-reschedule` (`apps/worker/src/profile-reschedule.ts`, registered in `jobs/registry.ts`) re-runs the combined per-connection scheduler (`athleteSchedulers` in `index.ts`, the same one `/connect icu` uses) for a linked athlete. Each scheduler re-reads `findBriefProfile`, so the brief time, close-out time, timezone and `Profile.notifyChatId` (`notifyChatId ?? telegramId`) take effect from the next run.
+
+The "No plan yet" card links to `t.me/<TELEGRAM_BOT_USERNAME>?start=season_new`. The bot's season wizard treats `/start season_new` like `/season new` (core `SEASON_NEW_START_PAYLOAD`).
 
 **Sign-in flow**:
 
@@ -264,7 +269,7 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 
 **Migrations**: `prisma/migrations/` starts with `0_init` (baseline of the pre-TA-9 schema), followed by `1_icu_connection`, `2_activity`, `3_wellness` (creates `Wellness`, copies `Fatigue.readiness` → `subjectiveReadiness` and `Fatigue.sleepScore` → `sleepScore`, then drops `Fatigue`, all in one transaction), `4_planned_session` and `5_season_plan`. Apply with `npm run db:deploy`. A database created earlier with `db push` must be baselined once: `npx prisma migrate resolve --applied 0_init`, then `npm run db:deploy`.
 
-**Migration series (TA-50)**: the folders apply in name order (`0_init` … `9a` … `9i`), which is a string sort, so there is no `10_…`: it would run before `2_…`. Pick the next letter suffix (`9j_…`) instead. `Fatigue` was folded into `Wellness` by `3_wellness` and no longer exists. Three pieces guard the series:
+**Migration series (TA-50)**: the folders apply in name order (`0_init` … `9a` … `9j`), which is a string sort, so there is no `10_…`: it would run before `2_…`. Pick the next letter suffix (`9k_…`) instead. `Fatigue` was folded into `Wellness` by `3_wellness` and no longer exists. Three pieces guard the series:
 
 - `apps/worker/test/schema-migration-set.test.ts` (PGlite): a fresh deploy creates a table for every model, a legacy DB with `Fatigue` rows upgrades through every later migration with equal row counts, and the index list in `scripts/db-expectations.ts` holds.
 - The CI `migrations` job runs `prisma migrate deploy` on an empty Postgres, `prisma migrate diff --exit-code` (schema.prisma must have no change that lacks a migration), `npm run db:seed` and `npm run db:verify` (`scripts/verify-db.ts`: all migrations finished, tables, indexes, seed counts).

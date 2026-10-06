@@ -23,6 +23,7 @@ import {
   SEASON_PUBLISH_JOB,
   WELLNESS_SYNC_JOB,
 } from '../sync-scheduler';
+import { PROFILE_RESCHEDULE_JOB, PROFILE_SETTINGS_QUEUE } from '@triathlon/core';
 
 /**
  * `every`/`cron` jobs are repeatable schedulers with id `<name>:<userId>`; `oneoff` jobs are
@@ -132,6 +133,13 @@ export const JOB_REGISTRY: readonly JobDef[] = [
     kind: 'cron',
     schedule: 'POST_RACE_TIME',
     owner: 'TA-49 Post-race',
+  },
+  {
+    name: PROFILE_RESCHEDULE_JOB,
+    queue: PROFILE_SETTINGS_QUEUE,
+    kind: 'oneoff',
+    schedule: 'dashboard Settings save',
+    owner: 'TA-54 Dashboard settings',
   },
 ];
 

@@ -6,9 +6,10 @@ import { securityHeaders, sendHtml } from './http';
 import { renderNotFound } from './views/auth-pages';
 import { renderPage } from './views/layout';
 import { renderShell } from './views/shell';
+import { settingsRouter, type SettingsDeps } from './settings/routes';
 import { STYLESHEET, STYLESHEET_PATH } from './views/style';
 
-export interface AppDeps extends AuthDeps {
+export interface AppDeps extends AuthDeps, SettingsDeps {
   logger: Pick<Logger, 'warn' | 'info' | 'error'>;
 }
 
@@ -30,6 +31,7 @@ export function createApp(deps: AppDeps): express.Express {
   app.use(authRouter(deps));
 
   const guard = requireSession(deps);
+  app.use(settingsRouter(deps, deps));
   app.get('/', guard, (_req, res) => {
     sendHtml(res, 200, renderShell(currentSession(res).csrf));
   });

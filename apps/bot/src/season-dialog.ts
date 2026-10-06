@@ -4,6 +4,7 @@ import {
   parseWeeklyHours,
   SEASON_MAX_WEEKLY_HOURS,
   SEASON_MIN_WEEKLY_HOURS,
+  SEASON_NEW_START_PAYLOAD,
   type WeakSportChoice,
 } from '@triathlon/core';
 import { DIALOG_TTL_SECONDS } from './connect-dialog';
@@ -80,7 +81,10 @@ async function onCommand(
   store: SeasonDialogStore
 ): Promise<SeasonDialogOutcome> {
   const { commandName, args } = parseCommand(text);
-  if (commandName === 'season' && args[0]?.toLowerCase() === 'new') {
+  const isSeasonNew = commandName === 'season' && args[0]?.toLowerCase() === 'new';
+  // Deep link from the dashboard: t.me/<bot>?start=season_new arrives as "/start season_new"
+  const isDeepLink = commandName === 'start' && args[0] === SEASON_NEW_START_PAYLOAD;
+  if (isSeasonNew || isDeepLink) {
     await store.set(userId, { step: 'hours' });
     return { kind: 'reply', text: PROMPT_HOURS, keyboard: HOURS_KEYBOARD };
   }

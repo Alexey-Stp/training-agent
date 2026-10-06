@@ -69,7 +69,7 @@ export interface WeeklyStatsJob {
 
 /** What the morning brief needs to know about an athlete. */
 export interface BriefProfile {
-  /** Private chat: the chat id is the athlete's Telegram user id */
+  /** Profile.notifyChatId (set on the dashboard), else the private chat: the Telegram user id */
   telegramChatId: number;
   timezone: string;
   /** `HH:mm` local; null uses DAILY_BRIEF_DEFAULT_TIME */

@@ -59,6 +59,17 @@ describe('season wizard', () => {
     expect(store.states.get(USER)).toEqual({ step: 'hours' });
   });
 
+  it('starts from the dashboard deep link (/start season_new)', async () => {
+    const out = await text('/start season_new');
+    expect(out).toMatchObject({ kind: 'reply', text: PROMPT_HOURS });
+    expect(store.states.get(USER)).toEqual({ step: 'hours' });
+  });
+
+  it('leaves a plain /start to the worker', async () => {
+    expect(await text('/start')).toEqual({ kind: 'pass' });
+    expect(await text('/start something_else')).toEqual({ kind: 'pass' });
+  });
+
   it('happy path with buttons: hours → weak sport → submit', async () => {
     await text('/season new');
 

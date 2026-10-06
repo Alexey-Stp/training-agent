@@ -1,11 +1,15 @@
 import 'dotenv/config';
 import type { Server } from 'node:http';
+import { Queue } from 'bullmq';
+import { Api } from 'grammy';
 import Redis from 'ioredis';
-import { getConfig } from '@triathlon/core';
+import { getConfig, PROFILE_SETTINGS_QUEUE, type ProfileRescheduleJob } from '@triathlon/core';
 import { createApp } from './app';
 import { RedisSessionStore } from './auth/session-store';
-import { createUserRepo, prisma } from './db';
+import { createSettingsRepo, createUserRepo, prisma } from './db';
 import { logger } from './logger';
+import { createProfileEvents } from './queue';
+import { createChatVerifier } from './telegram';
 
 const config = getConfig();
 
@@ -14,11 +18,17 @@ if (!config.DASHBOARD_LINK_SECRET) {
 }
 
 const redis = new Redis({ host: config.REDIS_HOST, port: config.REDIS_PORT });
+const profileQueue = new Queue<ProfileRescheduleJob>(PROFILE_SETTINGS_QUEUE, {
+  connection: { host: config.REDIS_HOST, port: config.REDIS_PORT },
+});
 
 const app = createApp({
   logger,
   sessions: new RedisSessionStore(redis),
   users: createUserRepo(prisma),
+  settings: createSettingsRepo(prisma),
+  chats: createChatVerifier(new Api(config.TELEGRAM_BOT_TOKEN)),
+  events: createProfileEvents(profileQueue),
   linkSecret: config.DASHBOARD_LINK_SECRET,
   sessionTtlHours: config.DASHBOARD_SESSION_TTL_HOURS,
   secureCookies: config.NODE_ENV !== 'development',
@@ -32,7 +42,7 @@ const server: Server = app.listen(config.WEB_PORT, () => {
 async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, 'Shutting down web dashboard');
   await new Promise<void>((resolve) => server.close(() => resolve()));
-  await Promise.all([prisma.$disconnect(), redis.quit()]);
+  await Promise.all([prisma.$disconnect(), redis.quit(), profileQueue.close()]);
   process.exit(0);
 }
 
