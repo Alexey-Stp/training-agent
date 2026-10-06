@@ -260,11 +260,11 @@ describe('C-race', () => {
     expect(replaced.some((s) => s.tags?.includes('long') || isHardSession(s))).toBe(true);
     expect(on(sessions, saturday).map((s) => s.title)).toEqual(['🏁 Test Race']);
     // Every other day is exactly what the block planned (up to rules-engine downgrades of
-    // hard sessions next to the race)
+    // hard sessions next to the race), except the recovery days after the race
+    const sunday = iso(WEEK, 6);
+    const own = (s: Session) => s.date !== saturday && s.date !== sunday;
     const strip = (s: Session) => [s.date, s.sport, s.durationMin];
-    expect(sessions.filter((s) => s.date !== saturday).map(strip)).toEqual(
-      plain.filter((s) => s.date !== saturday).map(strip)
-    );
+    expect(sessions.filter(own).map(strip)).toEqual(plain.filter(own).map(strip));
     expect(week.violations).toEqual([]);
   });
 

@@ -86,6 +86,15 @@ const envSchema = z.object({
     .default('true')
     .transform((v) => v === 'true'),
   RACE_BRIEF_TIME: z.string().regex(BRIEF_TIME_RE, 'must be HH:mm (24h)').default('09:00'),
+  // Post-race: from the day after a race, at this local time, the easy recovery block is planned
+  // and pushed, and the race activity is debriefed. No race activity within the timeout (hours
+  // after the end of race day) means the debrief is skipped and the athlete is asked if they raced
+  POST_RACE_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  POST_RACE_TIME: z.string().regex(BRIEF_TIME_RE, 'must be HH:mm (24h)').default('09:30'),
+  RACE_DEBRIEF_TIMEOUT_HOURS: z.coerce.number().int().min(1).max(168).default(48),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

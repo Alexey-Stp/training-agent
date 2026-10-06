@@ -1,3 +1,4 @@
+import { DEFAULT_RECOVERY_CONFIG, RecoveryConfig } from './race-recovery';
 import { RaceType } from './types';
 
 export interface WeeksRange {
@@ -52,6 +53,8 @@ export interface BlockGeneratorConfig {
   miniTaperFactor: number;
   /** Longest T-1 opener */
   openerMaxMin: number;
+  /** Easy block after a race: length per priority and race type */
+  recovery: RecoveryConfig;
 
   sportSplit: Record<RaceType, SportSplit>;
   /** Percentage points moved to the weak sport during base (0.10 = +10 pp) */
@@ -104,6 +107,7 @@ export const DEFAULT_BLOCK_GENERATOR_CONFIG: BlockGeneratorConfig = {
   },
   miniTaperFactor: 0.6,
   openerMaxMin: 30,
+  recovery: DEFAULT_RECOVERY_CONFIG,
 
   sportSplit: {
     [RaceType.sprint]: TRI_SPLIT,

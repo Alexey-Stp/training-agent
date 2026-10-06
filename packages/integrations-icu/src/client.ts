@@ -11,12 +11,14 @@ import {
   AthleteSchema,
   EventListSchema,
   EventSchema,
+  StreamListSchema,
   WellnessListSchema,
   type ActivityList,
   type Athlete,
   type CreateEventInput,
   type EventList,
   type IcuEvent,
+  type StreamList,
   type UpdateEventInput,
   type WellnessList,
 } from './schemas';
@@ -133,6 +135,18 @@ export class IcuClient {
     const url = `${ICU_BASE_URL}/athlete/${this.athleteId}/activities?${params}`;
     const response = await this.executeWithRetry(url, endpoint);
     return this.parseResponse(response, ActivityListSchema, endpoint);
+  }
+
+  /** GET /activity/:activityId/streams.json?types=... (streams not recorded are left out) */
+  async getActivityStreams(
+    activityId: string,
+    types: readonly string[] = ['time', 'watts', 'heartrate', 'velocity_smooth']
+  ): Promise<StreamList> {
+    const params = new URLSearchParams({ types: types.join(',') }).toString();
+    const endpoint = 'GET /activity/:id/streams';
+    const url = `${ICU_BASE_URL}/activity/${encodeURIComponent(activityId)}/streams.json?${params}`;
+    const response = await this.executeWithRetry(url, endpoint);
+    return this.parseResponse(response, StreamListSchema, endpoint);
   }
 
   /** GET /athlete/:id/wellness?oldest=&newest= */
