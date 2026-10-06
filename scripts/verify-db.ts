@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { PrismaClient } from '@prisma/client';
+import { createScriptClient } from './prisma-client';
 import { DEMO_DAYS, DEMO_TELEGRAM_ID } from './seed-demo-data';
 import { hasIndexPrefix, INDEX_ACCESS_PATHS } from './db-expectations';
 
@@ -80,7 +81,7 @@ async function checkSeed(prisma: PrismaClient): Promise<string[]> {
 }
 
 async function main(): Promise<void> {
-  const prisma = new PrismaClient();
+  const prisma = createScriptClient();
   try {
     const results = await Promise.all([
       checkMigrations(prisma),

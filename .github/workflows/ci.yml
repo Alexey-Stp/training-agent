@@ -30,6 +30,10 @@ jobs:
       - name: Generate Prisma Client
         run: npm run db:generate
 
+      # scripts/ imports @triathlon/core, which is resolved from dist/ (type-aware lint)
+      - name: Build core
+        run: npm -w @triathlon/core run build
+
       - name: Lint
         run: npm run lint
 

@@ -29,6 +29,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@prisma/adapter-pg": "^7.10.0",
     "@types/node": "^26.6.4",
     "eslint": "^10.11.0",
     "prettier": "^3.9.9",

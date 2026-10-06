@@ -62,6 +62,8 @@ services:
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/triathlon_coach
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+    ports:
+      - '${METRICS_PORT:-9100}:${METRICS_PORT:-9100}'
     depends_on:
       postgres:
         condition: service_healthy

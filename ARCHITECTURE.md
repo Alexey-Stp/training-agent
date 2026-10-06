@@ -113,6 +113,8 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 - `plan-command.ts` - `/plan push` handler (store, push, reply)
 - `daily-loop/` - Morning brief (`pipeline.ts`, `render.ts`, `checkin*.ts`), evening close-out (`closeout.ts`, `closeout-render.ts`, `closeout-store.ts`), shared per-athlete cron schedulers (`scheduler.ts`, also the weekly stats one) and run helpers (`run-helpers.ts`)
 - `reviews/` - Weekly stats job (`weekly-stats.ts` `runWeeklyStats`, repo interface in `weekly-stats-store.ts`)
+- `jobs/` - Job registry (`registry.ts`, the single source of truth for repeatable and one-off jobs) and `reconcile.ts` (boot-time removal of schedulers whose job is not registered)
+- `observability/` - `prom-client` metrics and the `/metrics` + `/healthz` server, `instrumentWorker` (shared worker listeners), the Redis daily-brief failure streak with the once-per-incident admin alert, optional Bull Board
 - `db.ts` - Database utilities (user creation, deduplication, `icuConnectionRepo`, `activityRepo`, `wellnessRepo`, `plannedSessionRepo`, `raceRepo`, `seasonRepo` (active season, drafts, transactional activation), `profileRepo`, `loadTrainingHours`, `dailyBriefRunRepo`, `eveningCloseoutRunRepo`, `closeoutRepo`, `weeklyStatsRepo`)
 
 **Design Principles**:

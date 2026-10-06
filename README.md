@@ -432,6 +432,15 @@ From the day after a race the bot runs one daily job at `POST_RACE_TIME` (09:30,
 
 Streams (power, heart rate, speed) are fetched from intervals.icu when the debrief runs and are not stored. Set `POST_RACE_ENABLED=false` to turn the job off.
 
+## Observability
+
+The worker exposes job metrics and can alert an admin when a morning brief keeps failing.
+
+- **Metrics.** `GET http://localhost:9100/metrics` (`METRICS_PORT`, off with `METRICS_ENABLED=false`) serves the default Node process metrics plus `job_duration_seconds{job,queue,status}` (histogram), `job_completed_total{job,queue}` and `job_failures_total{job,queue}`. A failure is counted per attempt, so retries count. `GET /healthz` returns 200. docker-compose publishes the port.
+- **Job registry.** `apps/worker/src/jobs/registry.ts` lists every job the worker may schedule. At boot, any repeatable scheduler in those queues whose job is not in the registry is deleted from Redis. When you add a job, add it to the registry too.
+- **Failure alert.** After `BRIEF_FAILURE_ALERT_THRESHOLD` (3) final daily-brief failures in a row for one athlete (retries do not count), the chat `ADMIN_TELEGRAM_ID` gets one message. It is sent once per incident; a successful brief ends the incident. Leave `ADMIN_TELEGRAM_ID` empty to turn the alert off.
+- **Bull Board.** `BULL_BOARD_ENABLED=true` serves a queue inspector at `http://127.0.0.1:9101/admin/queues` (`BULL_BOARD_PORT`). It can retry and delete jobs, so it binds to loopback only and docker-compose does not publish it. Use it for local development.
+
 ## intervals.icu Integration
 
 `packages/integrations-icu` (`@triathlon/integrations-icu`) is a typed REST client for [intervals.icu](https://intervals.icu). The worker uses it to validate credentials in `/connect icu` and to sync activities and wellness.
@@ -851,7 +860,7 @@ npm run test -w @triathlon/core
 ### Monitoring
 
 - **Logs**: Pino JSON logs ready for aggregation (ELK, Datadog)
-- **Metrics**: Add Prometheus metrics via `prom-client`
+- **Metrics**: Prometheus metrics on the worker, see [Observability](#observability)
 - **Alerts**: Monitor queue depth, job failure rates, latency
 - **Health Checks**: Already configured in docker-compose.yml
 
