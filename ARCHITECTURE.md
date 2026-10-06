@@ -237,7 +237,13 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 
 **Migrations**: `prisma/migrations/` starts with `0_init` (baseline of the pre-TA-9 schema), followed by `1_icu_connection`, `2_activity`, `3_wellness` (creates `Wellness`, copies `Fatigue.readiness` → `subjectiveReadiness` and `Fatigue.sleepScore` → `sleepScore`, then drops `Fatigue`, all in one transaction), `4_planned_session` and `5_season_plan`. Apply with `npm run db:deploy`. A database created earlier with `db push` must be baselined once: `npx prisma migrate resolve --applied 0_init`, then `npm run db:deploy`.
 
-**Indices**: Optimized for common queries (last 7 days workouts, user lookup)
+**Migration series (TA-50)**: the folders apply in name order (`0_init` … `9a` … `9h`), which is a string sort, so there is no `10_…`: it would run before `2_…`. Pick the next letter suffix (`9i_…`) instead. `Fatigue` was folded into `Wellness` by `3_wellness` and no longer exists. Three pieces guard the series:
+
+- `apps/worker/test/schema-migration-set.test.ts` (PGlite): a fresh deploy creates a table for every model, a legacy DB with `Fatigue` rows upgrades through every later migration with equal row counts, and the index list in `scripts/db-expectations.ts` holds.
+- The CI `migrations` job runs `prisma migrate deploy` on an empty Postgres, `prisma migrate diff --exit-code` (schema.prisma must have no change that lacks a migration), `npm run db:seed` and `npm run db:verify` (`scripts/verify-db.ts`: all migrations finished, tables, indexes, seed counts).
+- `npm run db:seed [yyyy-MM-dd]` (`scripts/seed-demo.ts`, rows from the pure `scripts/seed-demo-data.ts`) replaces the demo athlete (`telegramId 900000001`) with 30 days of wellness (CTL/ATL/TSB from the activity loads, a check-in every second day), activities, completed/skipped sessions plus a week ahead, an A-race and an active season. The same date and seed give the same rows. It creates no `IcuConnection`, so no scheduler or ICU call runs for it.
+
+**Indices**: every `(userId, date)`-style access path has an index or a unique constraint with those leading columns (unique: `Wellness`, `PlannedSession`, `DailyBriefRun`, the run tables; indexed: `Activity`, `Race`, `CoachDecision`, `Workout`). The migration test fails when one goes missing.
 
 ## Data Flow
 
