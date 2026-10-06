@@ -1,5 +1,6 @@
 import type { LlmProvider } from '../types';
 import { errorName } from '../util';
+import { splitOnSeparator } from './run';
 import {
   buildRaceDebriefPrompt,
   RACE_DEBRIEF_PROMPT_VERSION,
@@ -32,7 +33,6 @@ export interface RaceDebriefResult {
 const TAKEAWAY_COUNT = 3;
 const MAX_NARRATIVE_CHARS = 700;
 const MAX_TAKEAWAY_CHARS = 220;
-const SEPARATOR_LINE = '---';
 const BULLET = '- ';
 const NUMBER = /\d+(?:[.,:]\d+)*/g;
 
@@ -44,22 +44,6 @@ export const FALLBACK_DEBRIEF_TEXT: RaceDebriefText = {
     'Rest as planned, the easy block after the race is part of the training.',
   ],
 };
-
-/** The text before and after the line holding only `---`. */
-function splitOnSeparator(raw: string): string[] {
-  const parts: string[] = [];
-  let current: string[] = [];
-  for (const line of raw.split('\n')) {
-    if (line.trim() === SEPARATOR_LINE) {
-      parts.push(current.join('\n').trim());
-      current = [];
-    } else {
-      current.push(line);
-    }
-  }
-  parts.push(current.join('\n').trim());
-  return parts;
-}
 
 function numbersIn(text: string): string[] {
   return text.match(NUMBER) ?? [];

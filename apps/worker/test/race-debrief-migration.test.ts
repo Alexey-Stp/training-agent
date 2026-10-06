@@ -1,19 +1,11 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
+import { MIGRATIONS_DIR, migrationsUpTo } from './migration-helpers';
 
 // Runs the real Prisma migration SQL in an in-process Postgres (PGlite)
-const MIGRATIONS_DIR = path.resolve(__dirname, '../../../prisma/migrations');
 const TARGET = '9i_race_debrief';
-
-function migrationsUpTo(name: string): string[] {
-  return readdirSync(MIGRATIONS_DIR, { withFileTypes: true })
-    .filter((e) => e.isDirectory())
-    .map((e) => e.name)
-    .sort((a, b) => a.localeCompare(b))
-    .filter((n) => n.localeCompare(name) <= 0);
-}
 
 const INSERT_DEBRIEF = (id: string, user: string, race: string, raceDate: string) =>
   `INSERT INTO "RaceDebrief" ("id", "userId", "raceId", "raceDate", "updatedAt")

@@ -44,7 +44,7 @@ export function fallbackRaceBriefText(kind: RaceBriefPromptInput['kind']): RaceB
 }
 
 /** The text before and after the line holding only `---`; one part when there is no such line. */
-function splitOnSeparator(raw: string): string[] {
+export function splitOnSeparator(raw: string): string[] {
   const parts: string[] = [];
   let current: string[] = [];
   for (const line of raw.split('\n')) {
