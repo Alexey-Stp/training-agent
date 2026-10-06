@@ -46,7 +46,7 @@ describe('magic-link sign-in', () => {
     const shell = await get(h, '/', cookie.split(';')[0]);
     expect(shell.status).toBe(200);
     expect(shell.headers.get('cache-control')).toBe('no-store');
-    expect(await shell.text()).toContain('You are signed in');
+    expect(await shell.text()).toContain('aria-current="page"');
   });
 
   it('sets Secure cookies when configured', async () => {
@@ -120,7 +120,7 @@ describe('session guard', () => {
     h = await startApp(['user-a']);
     const res = await get(h, '/', cookie);
     expect(res.status).toBe(401);
-    expect(await res.text()).not.toContain('signed in');
+    expect(await res.text()).not.toContain('aria-current');
     expect(warnings(h)).toEqual([expect.objectContaining({ reason, tokenId: null })]);
   });
 

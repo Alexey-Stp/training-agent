@@ -6,7 +6,7 @@ import Redis from 'ioredis';
 import { getConfig, PROFILE_SETTINGS_QUEUE, type ProfileRescheduleJob } from '@triathlon/core';
 import { createApp } from './app';
 import { RedisSessionStore } from './auth/session-store';
-import { createSettingsRepo, createUserRepo, prisma } from './db';
+import { createDashboardReadRepo, createSettingsRepo, createUserRepo, prisma } from './db';
 import { logger } from './logger';
 import { createProfileEvents } from './queue';
 import { createChatVerifier } from './telegram';
@@ -29,6 +29,8 @@ const app = createApp({
   settings: createSettingsRepo(prisma),
   chats: createChatVerifier(new Api(config.TELEGRAM_BOT_TOKEN)),
   events: createProfileEvents(profileQueue),
+  reads: createDashboardReadRepo(prisma),
+  botUsername: config.TELEGRAM_BOT_USERNAME,
   linkSecret: config.DASHBOARD_LINK_SECRET,
   sessionTtlHours: config.DASHBOARD_SESSION_TTL_HOURS,
   secureCookies: config.NODE_ENV !== 'development',

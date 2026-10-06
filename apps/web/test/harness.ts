@@ -1,10 +1,11 @@
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
-import { signMagicLink } from '@triathlon/core';
+import { Intensity, signMagicLink, Sport } from '@triathlon/core';
 import { createApp, type AppDeps } from '../src/app';
 import { newSessionId, type SessionStore, type WebSession } from '../src/auth/session-store';
 import type { SettingsRepo, SettingsView } from '../src/settings/store';
 import type { ProfileSettings } from '../src/settings/validate';
+import type { DashboardReadRepo, DaySession, WellnessDay } from '../src/plan/read-store';
 
 export const SECRET = 'test-secret-'.padEnd(40, 'x');
 export const NOW = new Date('2026-10-06T08:00:00Z');
@@ -80,6 +81,7 @@ export async function startApp(
     sessions,
     users: { exists: (id) => Promise.resolve(known.has(id)) },
     settings: new MemorySettingsRepo(),
+    reads: new MemoryReadRepo(),
     chats: { verify: () => Promise.resolve({ ok: true }) },
     events: { changed: () => Promise.resolve() },
     linkSecret: SECRET,
@@ -171,4 +173,60 @@ export class MemorySettingsRepo implements SettingsRepo {
     this.profiles.set(userId, { ...current, ...settings });
     return Promise.resolve();
   }
+}
+
+/**
+ * Training data per user. Holds only what the read interface can return; there is nothing to
+ * write through, and `calls` counts reads (isolation tests check the userId of each).
+ */
+export class MemoryReadRepo implements DashboardReadRepo {
+  readonly timezones = new Map<string, string>();
+  readonly sessions = new Map<string, DaySession[]>();
+  readonly wellness = new Map<string, WellnessDay[]>();
+  readonly activeSeasons = new Set<string>();
+  readonly calls: { method: string; userId: string }[] = [];
+
+  findTimezone(userId: string): Promise<string | null> {
+    this.calls.push({ method: 'findTimezone', userId });
+    return Promise.resolve(this.timezones.get(userId) ?? null);
+  }
+
+  findSessions(userId: string, from: string, to: string): Promise<DaySession[]> {
+    this.calls.push({ method: 'findSessions', userId });
+    const rows = (this.sessions.get(userId) ?? []).filter((s) => s.date >= from && s.date <= to);
+    return Promise.resolve(
+      [...rows].sort((a, b) => a.date.localeCompare(b.date) || a.slot.localeCompare(b.slot))
+    );
+  }
+
+  hasActiveSeason(userId: string): Promise<boolean> {
+    this.calls.push({ method: 'hasActiveSeason', userId });
+    return Promise.resolve(this.activeSeasons.has(userId));
+  }
+
+  findWellness(userId: string, from: string, to: string): Promise<WellnessDay[]> {
+    this.calls.push({ method: 'findWellness', userId });
+    const rows = (this.wellness.get(userId) ?? []).filter((w) => w.date >= from && w.date <= to);
+    return Promise.resolve([...rows].sort((a, b) => a.date.localeCompare(b.date)));
+  }
+}
+
+/** A planned session row with sensible defaults (bike Z2, pushed, no activity). */
+export function session(overrides: Partial<DaySession> & { date: string }): DaySession {
+  return {
+    id: 'ps-' + overrides.date + '-' + (overrides.slot ?? 'bike-0'),
+    slot: 'bike-0',
+    sport: Sport.bike,
+    title: 'Endurance ride',
+    description: null,
+    durationMin: 60,
+    intensity: Intensity.z2,
+    steps: [{ kind: 'steady', durationMin: 60, zone: Intensity.z2 }],
+    status: 'pushed',
+    externalChange: null,
+    deviationPct: null,
+    actualIntensity: null,
+    activity: null,
+    ...overrides,
+  };
 }

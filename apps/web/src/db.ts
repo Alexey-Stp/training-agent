@@ -1,6 +1,9 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, type Prisma } from '@prisma/client';
+import type { Intensity, Sport } from '@triathlon/core';
 import type { UserRepo } from './auth/guard';
 import type { SettingsRepo } from './settings/store';
+import type { DashboardReadRepo, DaySession } from './plan/read-store';
+import { parseSteps } from './plan/steps';
 import { logger } from './logger';
 
 /**
@@ -74,6 +77,84 @@ export function createSettingsRepo(client: PrismaClient): SettingsRepo {
           noLongRunDay: s.noLongRunDay,
           notifyChatId: s.notifyChatId === null ? null : BigInt(s.notifyChatId),
         },
+      });
+    },
+  };
+}
+
+function toDaySession(row: PlannedSessionWithActivity): DaySession {
+  return {
+    id: row.id,
+    date: row.date,
+    slot: row.slot,
+    sport: row.sport as Sport,
+    title: row.title,
+    description: row.description,
+    durationMin: row.durationMin,
+    intensity: row.intensity as Intensity,
+    steps: parseSteps(row.steps),
+    status: row.status,
+    externalChange: row.externalChange,
+    deviationPct: row.deviationPct,
+    actualIntensity: row.actualIntensity as Intensity | null,
+    activity: row.activity,
+  };
+}
+
+const ACTIVITY_SELECT = {
+  name: true,
+  startTime: true,
+  durationSec: true,
+  distanceM: true,
+  avgHr: true,
+  avgPower: true,
+} as const;
+
+type PlannedSessionWithActivity = Prisma.PlannedSessionGetPayload<{
+  include: { activity: { select: typeof ACTIVITY_SELECT } };
+}>;
+
+/** Read-only queries for Today/Week: findFirst/findMany/findUnique only, all by userId. */
+export function createDashboardReadRepo(client: PrismaClient): DashboardReadRepo {
+  return {
+    async findTimezone(userId) {
+      const profile = await client.profile.findUnique({
+        where: { userId },
+        select: { timezone: true },
+      });
+      return profile?.timezone ?? null;
+    },
+
+    async findSessions(userId, from, to) {
+      const rows = await client.plannedSession.findMany({
+        where: { userId, date: { gte: from, lte: to }, deletedAt: null },
+        include: { activity: { select: ACTIVITY_SELECT } },
+        orderBy: [{ date: 'asc' }, { slot: 'asc' }],
+      });
+      return rows.map(toDaySession);
+    },
+
+    async hasActiveSeason(userId) {
+      const season = await client.seasonPlan.findFirst({
+        where: { userId, status: 'active' },
+        select: { id: true },
+      });
+      return season !== null;
+    },
+
+    findWellness(userId, from, to) {
+      return client.wellness.findMany({
+        where: { userId, date: { gte: from, lte: to } },
+        select: {
+          date: true,
+          hrv: true,
+          restingHr: true,
+          sleepHours: true,
+          tsb: true,
+          subjectiveReadiness: true,
+          soreness: true,
+        },
+        orderBy: { date: 'asc' },
       });
     },
   };
