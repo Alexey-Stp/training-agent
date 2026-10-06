@@ -95,6 +95,24 @@ const envSchema = z.object({
     .transform((v) => v === 'true'),
   POST_RACE_TIME: z.string().regex(BRIEF_TIME_RE, 'must be HH:mm (24h)').default('09:30'),
   RACE_DEBRIEF_TIMEOUT_HOURS: z.coerce.number().int().min(1).max(168).default(48),
+  // Job platform (TA-51): Prometheus /metrics and a health check on the worker, an optional Bull
+  // Board for local queue inspection, and the admin chat that gets the daily-brief failure alert
+  METRICS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  METRICS_PORT: z.coerce.number().int().min(1).max(65535).default(9100),
+  BULL_BOARD_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  BULL_BOARD_PORT: z.coerce.number().int().min(1).max(65535).default(9101),
+  // An empty value in .env means "not set"; z.coerce would turn it into 0
+  ADMIN_TELEGRAM_ID: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.coerce.number().int().positive().optional()
+  ),
+  BRIEF_FAILURE_ALERT_THRESHOLD: z.coerce.number().int().min(1).max(20).default(3),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

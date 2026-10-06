@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { Worker, Job, Queue } from 'bullmq';
 import { Bot } from 'grammy';
+import type { Server } from 'node:http';
 import Redis from 'ioredis';
 import {
   BLOCK_CONFIRM_COMMAND,
@@ -154,6 +155,12 @@ import {
   type BlockReviewDeps,
   type BlockReviewJob,
 } from './reviews/block-review';
+import { reconcileRegistry } from './jobs/reconcile';
+import { startBullBoard } from './observability/bull-board';
+import { createFailureStreakTracker } from './observability/failure-streak';
+import { instrumentWorker } from './observability/instrument';
+import { createMetrics } from './observability/metrics';
+import { closeServer, startMetricsServer } from './observability/server';
 
 const config = getConfig();
 
@@ -394,6 +401,19 @@ const weekShowDeps: WeekShowDeps = {
 const aiConfig = loadAiConfig();
 const llmProvider = withCallLog(createLlmProvider(aiConfig), llmCallLogRepo, { logger });
 const redis = new Redis(redisConnection);
+
+// Job platform (TA-51): per-job metrics and the daily-brief failure-streak alert
+const metrics = createMetrics();
+if (config.ADMIN_TELEGRAM_ID === undefined) {
+  logger.warn('ADMIN_TELEGRAM_ID is not set: daily brief failure alerts are off');
+}
+const briefFailureStreak = createFailureStreakTracker({
+  redis,
+  adminChatId: config.ADMIN_TELEGRAM_ID,
+  threshold: config.BRIEF_FAILURE_ALERT_THRESHOLD,
+  sendMessage: (chatId, text) => api.sendMessage(chatId, text),
+  logger,
+});
 
 const coachChatDeps: CoachChatDeps = {
   limiter: new RedisChatLimiter(redis),
@@ -707,6 +727,8 @@ const worker = new Worker<CommandJob>(
   }
 );
 
+metrics.observeWorker(worker, 'commands');
+
 worker.on('completed', (job) => {
   logger.info({ jobId: job.id }, 'Job completed');
 });
@@ -745,21 +767,11 @@ const syncWorker = new Worker<IcuSyncJob>(
   { connection: redisConnection, concurrency: 2 }
 );
 
-syncWorker.on('failed', (job, err) => {
-  logger.error(
-    {
-      jobId: job?.id,
-      job: job?.name,
-      userId: job?.data.userId,
-      attempt: job?.attemptsMade,
-      error: err,
-    },
-    'intervals.icu sync failed'
-  );
-});
-
-syncWorker.on('error', (err) => {
-  logger.error({ error: err }, 'Sync worker error');
+instrumentWorker(syncWorker, {
+  queue: ICU_SYNC_QUEUE,
+  label: 'intervals.icu sync',
+  logger,
+  metrics,
 });
 
 const dailyBriefDeps: DailyBriefDeps = {
@@ -788,16 +800,15 @@ const briefWorker = config.DAILY_BRIEF_ENABLED
     )
   : null;
 
-briefWorker?.on('failed', (job, err) => {
-  logger.error(
-    { jobId: job?.id, userId: job?.data.userId, attempt: job?.attemptsMade, error: err },
-    'Daily brief failed'
-  );
-});
-
-briefWorker?.on('error', (err) => {
-  logger.error({ error: err }, 'Daily brief worker error');
-});
+if (briefWorker) {
+  instrumentWorker(briefWorker, {
+    queue: DAILY_BRIEF_QUEUE,
+    label: 'Daily brief',
+    logger,
+    metrics,
+    streak: briefFailureStreak,
+  });
+}
 
 const closeoutDeps: EveningCloseoutDeps = {
   runs: eveningCloseoutRunRepo,
@@ -818,16 +829,14 @@ const closeoutWorker = config.EVENING_CLOSEOUT_ENABLED
     )
   : null;
 
-closeoutWorker?.on('failed', (job, err) => {
-  logger.error(
-    { jobId: job?.id, userId: job?.data.userId, attempt: job?.attemptsMade, error: err },
-    'Evening close-out failed'
-  );
-});
-
-closeoutWorker?.on('error', (err) => {
-  logger.error({ error: err }, 'Evening close-out worker error');
-});
+if (closeoutWorker) {
+  instrumentWorker(closeoutWorker, {
+    queue: EVENING_CLOSEOUT_QUEUE,
+    label: 'Evening close-out',
+    logger,
+    metrics,
+  });
+}
 
 const weeklyStatsDeps: WeeklyStatsDeps = {
   profiles: briefProfileRepo,
@@ -845,16 +854,14 @@ const weeklyStatsWorker = config.WEEKLY_STATS_ENABLED
     )
   : null;
 
-weeklyStatsWorker?.on('failed', (job, err) => {
-  logger.error(
-    { jobId: job?.id, userId: job?.data.userId, attempt: job?.attemptsMade, error: err },
-    'Weekly stats failed'
-  );
-});
-
-weeklyStatsWorker?.on('error', (err) => {
-  logger.error({ error: err }, 'Weekly stats worker error');
-});
+if (weeklyStatsWorker) {
+  instrumentWorker(weeklyStatsWorker, {
+    queue: WEEKLY_STATS_QUEUE,
+    label: 'Weekly stats',
+    logger,
+    metrics,
+  });
+}
 
 const weeklyReviewDeps: WeeklyReviewDeps = {
   runs: weeklyReviewRunRepo,
@@ -880,16 +887,14 @@ const weeklyReviewWorker = config.WEEKLY_REVIEW_ENABLED
     )
   : null;
 
-weeklyReviewWorker?.on('failed', (job, err) => {
-  logger.error(
-    { jobId: job?.id, userId: job?.data.userId, attempt: job?.attemptsMade, error: err },
-    'Weekly review failed'
-  );
-});
-
-weeklyReviewWorker?.on('error', (err) => {
-  logger.error({ error: err }, 'Weekly review worker error');
-});
+if (weeklyReviewWorker) {
+  instrumentWorker(weeklyReviewWorker, {
+    queue: WEEKLY_REVIEW_QUEUE,
+    label: 'Weekly review',
+    logger,
+    metrics,
+  });
+}
 
 const raceBriefDeps: RaceBriefDeps = {
   runs: raceBriefRunRepo,
@@ -913,16 +918,14 @@ const raceBriefWorker = config.RACE_BRIEF_ENABLED
     )
   : null;
 
-raceBriefWorker?.on('failed', (job, err) => {
-  logger.error(
-    { jobId: job?.id, userId: job?.data.userId, attempt: job?.attemptsMade, error: err },
-    'Race brief failed'
-  );
-});
-
-raceBriefWorker?.on('error', (err) => {
-  logger.error({ error: err }, 'Race brief worker error');
-});
+if (raceBriefWorker) {
+  instrumentWorker(raceBriefWorker, {
+    queue: RACE_BRIEF_QUEUE,
+    label: 'Race brief',
+    logger,
+    metrics,
+  });
+}
 
 const postRaceDeps: PostRaceDeps = {
   runs: raceDebriefRunRepo,
@@ -955,16 +958,14 @@ const postRaceWorker = config.POST_RACE_ENABLED
     )
   : null;
 
-postRaceWorker?.on('failed', (job, err) => {
-  logger.error(
-    { jobId: job?.id, userId: job?.data.userId, attempt: job?.attemptsMade, error: err },
-    'Post-race failed'
-  );
-});
-
-postRaceWorker?.on('error', (err) => {
-  logger.error({ error: err }, 'Post-race worker error');
-});
+if (postRaceWorker) {
+  instrumentWorker(postRaceWorker, {
+    queue: POST_RACE_QUEUE,
+    label: 'Post-race',
+    logger,
+    metrics,
+  });
+}
 
 const blockReviewDeps: BlockReviewDeps = {
   runs: blockReviewRunRepo,
@@ -989,18 +990,52 @@ const blockReviewWorker = config.BLOCK_REVIEW_ENABLED
     )
   : null;
 
-blockReviewWorker?.on('failed', (job, err) => {
-  logger.error(
-    { jobId: job?.id, userId: job?.data.userId, attempt: job?.attemptsMade, error: err },
-    'Block review failed'
-  );
-});
+if (blockReviewWorker) {
+  instrumentWorker(blockReviewWorker, {
+    queue: BLOCK_REVIEW_QUEUE,
+    label: 'Block review',
+    logger,
+    metrics,
+  });
+}
 
-blockReviewWorker?.on('error', (err) => {
-  logger.error({ error: err }, 'Block review worker error');
-});
+const registryQueues = {
+  [ICU_SYNC_QUEUE]: syncQueue,
+  [DAILY_BRIEF_QUEUE]: briefQueue,
+  [EVENING_CLOSEOUT_QUEUE]: closeoutQueue,
+  [WEEKLY_STATS_QUEUE]: weeklyStatsQueue,
+  [WEEKLY_REVIEW_QUEUE]: weeklyReviewQueue,
+  [BLOCK_REVIEW_QUEUE]: blockReviewQueue,
+  [RACE_BRIEF_QUEUE]: raceBriefQueue,
+  [POST_RACE_QUEUE]: postRaceQueue,
+};
+
+const servers: Server[] = [];
+
+async function startObservability() {
+  if (config.METRICS_ENABLED) {
+    servers.push(await startMetricsServer(metrics.registry, config.METRICS_PORT));
+    logger.info({ port: config.METRICS_PORT }, 'Metrics server listening on /metrics');
+  }
+  if (config.BULL_BOARD_ENABLED) {
+    const commandsQueue = new Queue('commands', { connection: redisConnection });
+    boardQueues.push(commandsQueue);
+    servers.push(
+      await startBullBoard(
+        [commandsQueue, ...Object.values(registryQueues)],
+        config.BULL_BOARD_PORT
+      )
+    );
+    logger.info({ port: config.BULL_BOARD_PORT }, 'Bull Board listening on /admin/queues');
+  }
+}
+
+const boardQueues: Queue[] = [];
 
 async function startIcuSync() {
+  // Delete schedulers whose job is no longer in the registry, then repair the known ones
+  const orphans = await reconcileRegistry(registryQueues);
+  logger.info(orphans, 'Job registry reconciled');
   const userIds = await activityRepo.listConnectedUserIds();
   const result = await reconcileSchedulers(syncQueue, icuSyncScheduler, userIds, syncJobs);
   logger.info(result, 'intervals.icu sync schedules reconciled');
@@ -1057,6 +1092,10 @@ async function startIcuSync() {
   logger.info(postRace, 'Post-race schedules reconciled');
 }
 
+startObservability().catch((error: unknown) => {
+  logger.error({ error }, 'Failed to start the metrics server or Bull Board');
+});
+
 startIcuSync().catch((error: unknown) => {
   logger.error({ error }, 'Failed to reconcile intervals.icu sync schedules');
 });
@@ -1077,7 +1116,9 @@ async function shutdown() {
     raceBriefWorker?.close(),
     postRaceWorker?.close(),
   ]);
+  await Promise.all(servers.map((server) => closeServer(server)));
   await Promise.all([
+    ...boardQueues.map((queue) => queue.close()),
     syncQueue.close(),
     briefQueue.close(),
     closeoutQueue.close(),
