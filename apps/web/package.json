@@ -7,9 +7,11 @@
     "build": "tsc -b",
     "typecheck": "tsc -b",
     "start": "node dist/index.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
+    "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "@triathlon/core": "*",
     "bullmq": "^6.3.11",

@@ -951,6 +951,14 @@ docker compose logs -f worker | datadog-agent
 - Edge cases and interactions
 - Run with `npm test`
 
+✅ **Web dashboard** (`apps/web/test/`, `apps/web/test-integration/`)
+
+- HTTP tests start `createApp` on an ephemeral port with in-memory fakes (`test/harness.ts`) and call it with `fetch`
+- **Auth** (`auth.test.ts`): a missing, malformed, tampered, expired, replayed or disabled link, or a missing or unknown session, gets a 401 page, a `{tokenId, reason}` warning and no data. The token is never logged
+- **Isolation** (`isolation.test.ts`): two athletes. A user id in the query or body, B's dates or weeks, a forged cookie, or B's link signed with another key never shows B's data, and every repo call carries A's `userId`
+- **Read-only** (`read-only.test.ts`): the real Prisma repos run on a recording client that throws on anything but `findUnique`/`findFirst`/`findMany`. 40 Today/Week loads issue zero writes, and every training query has `where.userId` of the session. `test-integration/read-only.int.test.ts` (`npm -w @triathlon/web run test:integration`, CI `integration` job) seeds the demo athlete in Postgres and checks that the `PlannedSession`/`Activity`/`Wellness` row counts and newest `updatedAt` are unchanged after repeated loads
+- **Mobile** (`mobile.test.ts`): each page plus the stylesheet is under 30 KB, has no scripts, has the viewport meta, uses no fixed width above 390 px, and labels every form field. A Lighthouse mobile run (Today, Week, Settings, with fakes) scored 100 performance, 100 accessibility and 100 best practices (FCP about 1 s, CLS 0)
+
 ### Recommended Additions
 
 📋 **Integration Tests**

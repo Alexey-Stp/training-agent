@@ -13,15 +13,29 @@ TrainingAgent/
 │   │   ├── package.json           # Bot dependencies
 │   │   └── tsconfig.json          # TypeScript config
 │   │
-│   └── worker/                     # Background job processor
+│   ├── worker/                     # Background job processor
+│   │   ├── src/
+│   │   │   ├── index.ts           # Worker entry (BullMQ consumer)
+│   │   │   ├── handlers.ts        # Command handlers (/plan, /log, etc)
+│   │   │   ├── db.ts              # Database utilities
+│   │   │   └── logger.ts          # Pino logger configuration
+│   │   ├── Dockerfile             # Multi-stage Docker build
+│   │   ├── package.json           # Worker dependencies
+│   │   └── tsconfig.json          # TypeScript config
+│   │
+│   └── web/                        # Athlete web dashboard (TA-52)
 │       ├── src/
-│       │   ├── index.ts           # Worker entry (BullMQ consumer)
-│       │   ├── handlers.ts        # Command handlers (/plan, /log, etc)
-│       │   ├── db.ts              # Database utilities
-│       │   └── logger.ts          # Pino logger configuration
-│       ├── Dockerfile             # Multi-stage Docker build
-│       ├── package.json           # Worker dependencies
-│       └── tsconfig.json          # TypeScript config
+│       │   ├── index.ts           # Express server entry
+│       │   ├── app.ts             # createApp(deps): routes + middleware
+│       │   ├── db.ts              # Prisma repos (read-only plan data, Profile settings)
+│       │   ├── auth/              # Magic-link sign-in, Redis sessions, guards
+│       │   ├── today/ week/       # Today and Week views (read-only)
+│       │   ├── settings/          # Settings form (the only write path)
+│       │   └── views/             # Layout, HTML escaping, stylesheet
+│       ├── test/                  # Unit + HTTP tests with in-memory fakes
+│       ├── test-integration/      # Read-only check against Postgres (CI)
+│       ├── Dockerfile
+│       └── package.json
 │
 ├── packages/                       # Shared packages
 │   └── core/                      # Core business logic
@@ -86,22 +100,27 @@ Helper scripts for common tasks (testing, DB initialization).
 ## Import Patterns
 
 ### Apps import from core:
+
 ```typescript
 // apps/bot/src/index.ts
 import { CommandJob, getConfig } from '@triathlon/core';
 ```
 
 ### Core is self-contained:
+
 ```typescript
 // packages/core/src/rules-engine.ts
 import { WeekPlan, Session } from './types';
 ```
 
-### Database access only in worker:
+### Database access only in worker and web:
+
 ```typescript
-// apps/worker/src/db.ts
+// apps/worker/src/db.ts, apps/web/src/db.ts
 import { PrismaClient } from '@prisma/client';
 ```
+
+The bot never touches the database. The web dashboard reads plan and training data through `DashboardReadRepo` (no write methods) and writes only `Profile` from the Settings form. Prisma 7 needs a driver adapter: `apps/web/src/db.ts` `createPrismaClient` connects through `@prisma/adapter-pg`, like `scripts/prisma-client.ts`.
 
 ## Build Output
 
@@ -118,8 +137,8 @@ These are excluded from git via `.gitignore`.
 ## Configuration Hierarchy
 
 1. **tsconfig.base.json** - Base TypeScript settings
-2. **apps/*/tsconfig.json** - Extends base, specific to each app
-3. **packages/*/tsconfig.json** - Extends base, specific to each package
+2. **apps/\*/tsconfig.json** - Extends base, specific to each app
+3. **packages/\*/tsconfig.json** - Extends base, specific to each package
 
 ## Docker Build Context
 
@@ -179,6 +198,7 @@ npm run build
 # Run specific app
 npm run dev:bot
 npm run dev:worker
+npm run dev:web
 ```
 
 ## Production Build
@@ -200,7 +220,7 @@ docker compose exec bot npx prisma db push
 
 - **package.json** - Workspace configuration, shared scripts
 - **tsconfig.base.json** - Shared TypeScript strict settings
-- **docker-compose.yml** - Postgres, Redis, Bot, Worker orchestration
+- **docker-compose.yml** - Postgres, Redis, Bot, Worker, Web orchestration
 - **.env.example** - Required environment variables
 
 ### Core Package
@@ -221,6 +241,12 @@ docker compose exec bot npx prisma db push
 - **index.ts** - BullMQ worker, job processing loop
 - **handlers.ts** - Command implementations (fat logic)
 - **db.ts** - Prisma client, user management
+
+### Web Service
+
+- **app.ts** - `createApp(deps)`: security headers, auth routes, Today/Week/Settings
+- **auth/** - magic-link verification, Redis sessions, `requireSession` / `requireCsrf`
+- **db.ts** - `createPrismaClient` (pg adapter) and the user, read and settings repos
 
 ## File Size Guidelines
 

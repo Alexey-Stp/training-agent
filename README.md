@@ -460,6 +460,8 @@ The worker exposes job metrics and can alert an admin when a morning brief keeps
 - **Settings.** `/settings` edits FTP, threshold HR, timezone, brief and close-out times, swim/bike/run day preferences, and the Telegram chat for briefs and reviews. Every field is validated on the server: an invalid form is shown again with a message per field, and nothing is saved. Saving queues a `profile-reschedule` job, so the worker re-registers the brief, close-out and review schedulers with the new time and timezone. Commands read the profile directly, so `/plan` uses a new FTP right away.
 - **Notification chat.** Empty means your private chat with the bot. For a group or channel, add the bot there first (as an admin in a channel) and enter the chat id, e.g. `-1001234567890`. The bot posts a test message before the id is saved. Scheduled messages (brief, close-out, reviews, race briefs) go there; replies to commands still go to the chat you typed them in.
 - **Off by default.** Leave `DASHBOARD_BASE_URL` empty and `/dashboard` answers that the dashboard is not set up.
+- **Deploying it.** Serve it over HTTPS (a reverse proxy in front of `WEB_PORT`): outside `NODE_ENV=development` the session cookie is `Secure`, so it is not sent over plain http. Pages carry a strict CSP (no scripts), `Referrer-Policy: no-referrer` and `Cache-Control: no-store`.
+- **Guarantees, covered by tests.** Every query is scoped to the signed-in athlete, and a forged identifier never shows another athlete's data. Today and Week only read: row counts and `updatedAt` stay unchanged across repeated loads (checked against Postgres in CI), and only the Settings POST writes. Pages are under 30 KB with no JavaScript; a Lighthouse mobile run scored 100 for performance, accessibility and best practices.
 - **Running it.** `npm run dev:web` serves it on `WEB_PORT` (3000), and docker-compose runs it as the `web` service. `GET /healthz` returns 200.
 
 ## intervals.icu Integration
@@ -578,7 +580,7 @@ pnpm install
 ### 4. Run with Docker Compose
 
 ```bash
-# Start all services (postgres, redis, bot, worker)
+# Start all services (postgres, redis, bot, worker, web)
 docker compose up --build
 
 # First time: Apply database migrations in another terminal
@@ -641,6 +643,9 @@ npm run dev:bot
 
 # Terminal 4: Start worker
 npm run dev:worker
+
+# Terminal 5: Start the web dashboard (http://localhost:3000, sign in with /dashboard)
+npm run dev:web
 ```
 
 ### Database Management

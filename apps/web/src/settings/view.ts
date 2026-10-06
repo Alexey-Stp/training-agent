@@ -118,7 +118,10 @@ function daySelect(field: SettingsField, label: string, value: string, errors: E
 function timezoneSelect(value: string, errors: Errors): string {
   const zones = Intl.supportedValuesOf('timeZone');
   const list = zones.includes(value) || !value ? zones : [value, ...zones];
-  const options = list.map((tz) => option(tz, tz, value));
+  // An option without a value attribute submits its text: keeps the 400+ zones small
+  const options = list.map(
+    (tz) => (tz === value ? '<option selected>' : '<option>') + esc(tz) + '</option>'
+  );
   return [
     '<label for="timezone">Timezone</label>',
     '<select id="timezone" name="timezone"' +

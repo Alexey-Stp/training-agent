@@ -45,6 +45,8 @@ export function renderPage(options: PageOptions): string {
     '<meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     '<meta name="robots" content="noindex">',
+    // No favicon request (it would 404): an empty data-URI icon
+    '<link rel="icon" href="data:,">',
     '<title>' + esc(options.title) + ' · Triathlon Coach</title>',
     '<link rel="stylesheet" href="' + cssHref + '">',
     '</head>',

@@ -47,7 +47,7 @@ describe('GET /settings', () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('value="355"');
-    expect(html).toContain('<option value="Europe/Prague" selected>');
+    expect(html).toContain('<option selected>Europe/Prague</option>');
     expect(html).toContain('value="Wed" checked');
     expect(html).toContain('id 1001');
     expect(html).not.toContain('401');

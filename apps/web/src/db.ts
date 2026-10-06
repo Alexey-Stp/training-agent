@@ -1,29 +1,37 @@
+import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient, type Prisma } from '@prisma/client';
+import type { Logger } from 'pino';
 import type { Intensity, Sport } from '@triathlon/core';
 import type { UserRepo } from './auth/guard';
 import type { SettingsRepo } from './settings/store';
 import type { DashboardReadRepo, DaySession } from './plan/read-store';
 import { parseSteps } from './plan/steps';
-import { logger } from './logger';
 
 /**
  * The web app reads training data and writes only Profile settings. Every repo method takes
  * the session's userId and scopes its query by it.
+ *
+ * Prisma 7 has no built-in driver, so the client connects through the pg adapter.
  */
-export const prisma = new PrismaClient({
-  log: [
-    { level: 'warn', emit: 'event' },
-    { level: 'error', emit: 'event' },
-  ],
-});
-
-prisma.$on('warn', (e) => {
-  logger.warn(e, 'Prisma warning');
-});
-
-prisma.$on('error', (e) => {
-  logger.error(e, 'Prisma error');
-});
+export function createPrismaClient(
+  connectionString: string,
+  logger: Pick<Logger, 'warn' | 'error'>
+): PrismaClient {
+  const client = new PrismaClient({
+    adapter: new PrismaPg({ connectionString }),
+    log: [
+      { level: 'warn', emit: 'event' },
+      { level: 'error', emit: 'event' },
+    ],
+  });
+  client.$on('warn', (e) => {
+    logger.warn(e, 'Prisma warning');
+  });
+  client.$on('error', (e) => {
+    logger.error(e, 'Prisma error');
+  });
+  return client;
+}
 
 export function createUserRepo(client: PrismaClient): UserRepo {
   return {

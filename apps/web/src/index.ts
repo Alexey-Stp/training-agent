@@ -6,7 +6,12 @@ import Redis from 'ioredis';
 import { getConfig, PROFILE_SETTINGS_QUEUE, type ProfileRescheduleJob } from '@triathlon/core';
 import { createApp } from './app';
 import { RedisSessionStore } from './auth/session-store';
-import { createDashboardReadRepo, createSettingsRepo, createUserRepo, prisma } from './db';
+import {
+  createDashboardReadRepo,
+  createPrismaClient,
+  createSettingsRepo,
+  createUserRepo,
+} from './db';
 import { logger } from './logger';
 import { createProfileEvents } from './queue';
 import { createChatVerifier } from './telegram';
@@ -17,6 +22,7 @@ if (!config.DASHBOARD_LINK_SECRET) {
   logger.warn('DASHBOARD_LINK_SECRET is not set: every sign-in link will be rejected');
 }
 
+const prisma = createPrismaClient(config.DATABASE_URL, logger);
 const redis = new Redis({ host: config.REDIS_HOST, port: config.REDIS_PORT });
 const profileQueue = new Queue<ProfileRescheduleJob>(PROFILE_SETTINGS_QUEUE, {
   connection: { host: config.REDIS_HOST, port: config.REDIS_PORT },

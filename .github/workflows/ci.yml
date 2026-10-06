@@ -217,6 +217,11 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/triathlon_coach_test
 
+      - name: Web dashboard read-only check
+        run: npm -w @triathlon/web run test:integration
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/triathlon_coach_test
+
       - name: Verify Redis connection
         run: |
           sudo apt-get update && sudo apt-get install -y redis-tools
