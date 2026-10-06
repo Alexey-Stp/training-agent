@@ -230,21 +230,21 @@ export async function runRaceBriefJob(
 
   const date = localToday(deps.now(), profile.timezone);
   const due = await dueBriefs(deps, userId, date);
-  const briefs: RaceBriefOutcome[] = [];
-  for (const { race, kind } of due) {
-    // Sequential: the day's briefs reach the athlete in order, and a retry resumes after the
-    // ones already sent
-    const ctx: RaceCtx = {
-      userId,
-      chatId: profile.telegramChatId,
-      date,
-      race,
-      kind,
-      deps,
-      timings: {},
-    };
-    briefs.push(await briefRace(ctx));
-  }
+  // At most one brief per due race: they are independent, each has its own run row, and a retry
+  // skips the ones already sent
+  const briefs: RaceBriefOutcome[] = await Promise.all(
+    due.map(({ race, kind }) =>
+      briefRace({
+        userId,
+        chatId: profile.telegramChatId,
+        date,
+        race,
+        kind,
+        deps,
+        timings: {},
+      })
+    )
+  );
   deps.logger.info({ userId, date, briefs }, 'race brief finished');
   return { status: 'done', date, briefs };
 }

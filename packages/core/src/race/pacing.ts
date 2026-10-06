@@ -98,7 +98,7 @@ export function bikeTarget(
   config: RacePacingConfig = DEFAULT_RACE_PACING_CONFIG
 ): BikeTarget | null {
   const band = config.bikeFtpPct[raceType];
-  if (!band || !(ftp > 0)) return null;
+  if (!band || ftp <= 0) return null;
   return {
     lowW: Math.round((ftp * band[0]) / 100),
     highW: Math.round((ftp * band[1]) / 100),

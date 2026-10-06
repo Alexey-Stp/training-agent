@@ -29,7 +29,7 @@ export interface RaceBriefResult {
 }
 
 const MAX_PART_CHARS = 400;
-const SEPARATOR = /^\s*---\s*$/m;
+const SEPARATOR_LINE = '---';
 
 export function fallbackRaceBriefText(kind: RaceBriefPromptInput['kind']): RaceBriefText {
   return kind === 't7'
@@ -43,12 +43,28 @@ export function fallbackRaceBriefText(kind: RaceBriefPromptInput['kind']): RaceB
       };
 }
 
+/** The text before and after the line holding only `---`; one part when there is no such line. */
+function splitOnSeparator(raw: string): string[] {
+  const parts: string[] = [];
+  let current: string[] = [];
+  for (const line of raw.split('\n')) {
+    if (line.trim() === SEPARATOR_LINE) {
+      parts.push(current.join('\n').trim());
+      current = [];
+    } else {
+      current.push(line);
+    }
+  }
+  parts.push(current.join('\n').trim());
+  return parts;
+}
+
 /**
  * Digits belong to the deterministic part of the brief. A reply with any digit outside the race
  * name is rejected, so the LLM can't state a number.
  */
 export function parseRaceBriefText(raw: string, raceName: string): RaceBriefText | null {
-  const parts = raw.split(SEPARATOR).map((part) => part.trim());
+  const parts = splitOnSeparator(raw);
   if (parts.length !== 2 || parts.some((part) => part === '' || part.length > MAX_PART_CHARS)) {
     return null;
   }
