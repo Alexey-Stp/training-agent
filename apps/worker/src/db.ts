@@ -17,6 +17,7 @@ import {
 } from '@triathlon/core';
 import type {
   PlannedSessionDraft,
+  RunEffort,
   TrainingBlock,
   WeeklyStats,
   WorkoutBlock,
@@ -60,6 +61,7 @@ import type {
 import type { CheckInRepo } from './daily-loop/checkin';
 import type { WeeklyStatsRepo } from './reviews/weekly-stats-store';
 import type { WeeklyReviewRun, WeeklyReviewRunRepo } from './reviews/weekly-review-store';
+import type { RaceBriefRun, RaceBriefRunRepo } from './races/race-brief-store';
 import type {
   BlockReviewRun,
   BlockReviewRunRepo,
@@ -1433,5 +1435,85 @@ export const seasonReprojectRepo: SeasonReprojectRepo = {
       if (error instanceof StaleSeasonError) return 'stale';
       throw error;
     }
+  },
+};
+
+/** Run activities with a distance and a 20–60 min duration: candidates for the run threshold. */
+export const runEffortRepo = {
+  async listRunEfforts(userId: string, from: string, to: string): Promise<RunEffort[]> {
+    const rows = await prisma.activity.findMany({
+      where: {
+        userId,
+        sport: 'run',
+        startDateLocal: { gte: from, lte: to },
+        distanceM: { gt: 0 },
+        durationSec: { gte: 20 * 60, lte: 60 * 60 },
+      },
+      select: { startDateLocal: true, durationSec: true, distanceM: true, avgHr: true },
+      orderBy: { startDateLocal: 'asc' },
+    });
+    return rows.map((r) => ({
+      date: r.startDateLocal,
+      durationSec: r.durationSec,
+      distanceM: r.distanceM,
+      avgHr: r.avgHr,
+    }));
+  },
+};
+
+export const raceBriefRunRepo: RaceBriefRunRepo = {
+  async claim({ userId, raceId, kind, raceDate }, now, leaseMs) {
+    // skipDuplicates: the run may exist from an earlier trigger or attempt
+    await prisma.raceBriefRun.createMany({
+      data: [{ userId, raceId, kind, raceDate }],
+      skipDuplicates: true,
+    });
+    const where = { userId_raceId_kind_raceDate: { userId, raceId, kind, raceDate } };
+    // One conditional update takes the run over, so two concurrent triggers can't both win
+    const { count } = await prisma.raceBriefRun.updateMany({
+      where: {
+        userId,
+        raceId,
+        kind,
+        raceDate,
+        OR: [
+          { status: { in: ['pending', 'failed'] } },
+          { status: 'running', startedAt: { lt: new Date(now.getTime() - leaseMs) } },
+        ],
+      },
+      data: { status: 'running', startedAt: now, error: null },
+    });
+    const row = await prisma.raceBriefRun.findUniqueOrThrow({ where });
+    if (count > 0) {
+      const run: RaceBriefRun = {
+        id: row.id,
+        status: row.status,
+        briefText: row.briefText,
+        stageTimings: row.stageTimings as StageTimings,
+      };
+      return { status: 'claimed', run };
+    }
+    return { status: row.status === 'running' ? 'in_progress' : 'already_sent' };
+  },
+
+  async saveBrief(id, briefText, stale, stageTimings) {
+    await prisma.raceBriefRun.update({
+      where: { id },
+      data: { briefText, stale, stageTimings: toJson(stageTimings) },
+    });
+  },
+
+  async markSent(id, sentAt, stageTimings) {
+    await prisma.raceBriefRun.update({
+      where: { id },
+      data: { status: 'sent', sentAt, error: null, stageTimings: toJson(stageTimings) },
+    });
+  },
+
+  async markFailed(id, error, stageTimings) {
+    await prisma.raceBriefRun.update({
+      where: { id },
+      data: { status: 'failed', error, stageTimings: toJson(stageTimings) },
+    });
   },
 };

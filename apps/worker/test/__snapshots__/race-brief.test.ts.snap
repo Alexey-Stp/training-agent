@@ -1,0 +1,91 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`B and C races > get the shorter T-1 brief for a B race 1`] = `
+"🏁 <b>Prague Half</b> · Race eve
+
+You are ready for this.
+
+<b>Bike</b>
+• 78–82% of FTP = 234–246 W (from FTP 300)
+
+<b>Run</b>
+• no recent data — race by feel/HR
+
+<b>Fueling</b>
+• 60–80 g carbs/h, start early and keep to the plan
+
+Trust your preparation."
+`;
+
+exports[`B and C races > get the shorter T-1 brief for a C race 1`] = `
+"🏁 <b>Prague Half</b> · Race eve
+
+You are ready for this.
+
+<b>Bike</b>
+• 78–82% of FTP = 234–246 W (from FTP 300)
+
+<b>Run</b>
+• no recent data — race by feel/HR
+
+<b>Fueling</b>
+• 60–80 g carbs/h, start early and keep to the plan
+
+Trust your preparation."
+`;
+
+exports[`T-1 brief of an A half-distance race > shows the bike target from FTP and does not invent a run pace 1`] = `
+"🏁 <b>Prague Half</b> · Race eve
+
+You are ready for this.
+
+<b>Bike</b>
+• 78–82% of FTP = 234–246 W (from FTP 300)
+
+<b>Run</b>
+• no recent data — race by feel/HR
+
+<b>Swim</b>
+• Smooth and easy, stay aerobic and save your legs for the bike.
+
+<b>Fueling</b>
+• 60–80 g carbs/h, start early and keep to the plan
+
+<b>Weather</b>
+• check the forecast the evening before and adjust kit and fluids
+
+Trust your preparation."
+`;
+
+exports[`T-7 brief of an A-race > has the week overview and the checklist, with no pacing numbers 1`] = `
+"🏁 <b>Prague Half</b> · Race week
+
+You are ready for this.
+
+<b>Race</b>
+• Sat Oct 17, half
+
+<b>This week</b>
+• Mon 🏃 Easy run 40min
+• Wed 🚴 Openers 45min
+
+<b>Gear</b>
+• Wetsuit (if legal) and goggles + spare pair
+• Swim cap and anti-chafe
+• Bike serviced, tyres checked, spare tube and CO2
+• Helmet, bike shoes, race belt
+• Run shoes (broken in)
+• Hat or visor, sunglasses
+• Bottles and gels on the bike, spare nutrition
+• Transition bags labelled
+
+<b>Nutrition</b>
+• Review your race-day nutrition plan
+• Nothing new on race day: use what you trained with
+
+<b>Admin</b>
+• Confirm registration and collect your race pack
+• Check the briefing time and start wave
+
+Trust your preparation."
+`;

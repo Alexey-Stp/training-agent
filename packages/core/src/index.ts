@@ -13,3 +13,4 @@ export * from './block-review';
 export * from './checkin';
 export * from './closeout';
 export * from './reviews';
+export * from './race';

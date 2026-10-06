@@ -741,6 +741,28 @@ block_confirm / block_decline (br:c|d:<runId>) → handleBlockReviewAnswer (apps
 - **Answers.** Block decisions are not answerable through `cc:` (coach-apply returns not found); `findAnswerText` reads `BlockReviewRun.reportText` for them. The bot routes `br:` taps like the season buttons (no client-side TTL); the worker enforces `BLOCK_REVIEW_TTL_HOURS`.
 - **Storage.** Migration `9f_block_review`: `CoachDecisionOrigin` += `block`, `SeasonPlan.weeklyHoursAvailable`/`weakSport` (the wizard's answers; legacy seasons fall back to the busiest block's hours), and `BlockReviewRun` (unique `(userId, seasonPlanId, key)`, `trigger`, lease via `startedAt`, `verdict`, `proposedBlocks` = `{raceDate, startDate, frozenCount, truncated, blocks}`, `freezeThrough`, `seasonUpdatedAt`, report fields, cascade with the season and the user).
 
+### Race briefs (implemented)
+
+```
+race-brief queue: one daily cron scheduler per linked athlete (same factory and reconcile as the morning brief)
+  key race-brief:<userId>, pattern '<m> <h> * * *' from RACE_BRIEF_TIME, tz Profile.timezone
+        │
+        ▼
+runRaceBriefJob (apps/worker/src/races/race-brief.ts)
+  today = local date; races dated today+7 and today+1 (raceRepo.findByDate) → core raceBriefKind:
+    t1 for any priority, t7 only for an A-race; nothing due → no-op
+  per (race, kind): claim RaceBriefRun (userId, raceId, kind, raceDate)  ─ already sent → skip; lease held → retry later
+  stored briefText? ─► resend it (no LLM call)
+  t7: planned sessions today..+6 + core raceChecklist
+  t1: activity sync (failure → stale note) → core buildPacingPlan(FTP, run efforts) → bike band, run band | null, fueling
+  ai runRaceBrief (prompts/race-brief-v1.md): intro + outro only; digits in the reply → fixed fallback text
+  renderRaceBrief (HTML, everything escaped) → saveBrief → send → markSent
+```
+
+- **Pacing** (core `race/pacing.ts`, pure). `bikeTarget` = FTP × the race type's % band, rounded to watts. `estimateRunThreshold` takes the fastest run of 20–60 min within 90 days (`Activity.distanceM` and `durationSec`; whole-run averages, so it is a proxy) and `runTarget` applies a per-type factor with a ±2% band; no qualifying run gives `null` and the brief says so. `fuelingPlan` and `swimNote` are per type. Everything is in `DEFAULT_RACE_PACING_CONFIG`.
+- **Checklist** (core `race/checklist.ts`) per race type; `raceBriefKind` (core `race/brief.ts`) is the A vs B/C matrix.
+- **Storage.** Migration `9h_race_brief`: `RaceBriefRun` (unique `(userId, raceId, kind, raceDate)`, cascade on user and race), enums `RaceBriefKind`, `RaceBriefStatus`.
+
 ## Security Considerations
 
 ### Current Protections

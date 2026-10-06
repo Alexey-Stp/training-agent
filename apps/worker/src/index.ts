@@ -51,6 +51,8 @@ import {
   checkInRepo,
   weeklyStatsRepo,
   weeklyReviewRunRepo,
+  raceBriefRunRepo,
+  runEffortRepo,
   blockReviewRunRepo,
   seasonReprojectRepo,
 } from './db';
@@ -108,6 +110,10 @@ import {
   EVENING_CLOSEOUT_QUEUE,
   WEEKLY_STATS_QUEUE,
   WEEKLY_REVIEW_QUEUE,
+  RACE_BRIEF_QUEUE,
+  createRaceBriefScheduler,
+  reconcileRaceBriefSchedulers,
+  type RaceBriefJob,
   combineSchedulers,
   createCheckInContinuation,
   createDailyBriefScheduler,
@@ -134,6 +140,7 @@ import { runEveningCloseout, type EveningCloseoutDeps } from './daily-loop/close
 import { handleCheckInAnswer, type CheckInAnswerDeps } from './daily-loop/checkin-answer';
 import { runWeeklyStats, type WeeklyStatsDeps } from './reviews/weekly-stats';
 import { runWeeklyReviewJob, type WeeklyReviewDeps } from './reviews/weekly-review';
+import { runRaceBriefJob, type RaceBriefDeps } from './races/race-brief';
 import {
   runBlockReviewJob,
   type BlockReviewDeps,
@@ -215,6 +222,16 @@ const blockReviewQueue = new Queue<BlockReviewJob>(BLOCK_REVIEW_QUEUE, {
   connection: redisConnection,
 });
 const blockReviewScheduler = createBlockReviewScheduler(blockReviewQueue, blockReviewSchedulerDeps);
+// Race briefs: per linked athlete, one daily cron scheduler at the local RACE_BRIEF_TIME; the job
+// sends only when a race is 7 days (A) or 1 day (A/B/C) away
+const raceBriefSchedulerDeps: DailyBriefSchedulerDeps = {
+  profiles: briefProfileRepo,
+  defaultTime: config.RACE_BRIEF_TIME,
+};
+const raceBriefQueue = new Queue<RaceBriefJob>(RACE_BRIEF_QUEUE, {
+  connection: redisConnection,
+});
+const raceBriefScheduler = createRaceBriefScheduler(raceBriefQueue, raceBriefSchedulerDeps);
 const weeklyGuardrailConfig: WeeklyGuardrailConfig = {
   ...DEFAULT_WEEKLY_GUARDRAIL_CONFIG,
   maxRamp: config.WEEKLY_REVIEW_MAX_RAMP_PCT / 100,
@@ -395,7 +412,8 @@ const icuConnectDeps: IcuConnectDeps = {
     ...(config.EVENING_CLOSEOUT_ENABLED ? [closeoutScheduler] : []),
     ...(config.WEEKLY_STATS_ENABLED ? [weeklyStatsScheduler] : []),
     ...(config.WEEKLY_REVIEW_ENABLED ? [weeklyReviewScheduler] : []),
-    ...(config.BLOCK_REVIEW_ENABLED ? [blockReviewScheduler] : [])
+    ...(config.BLOCK_REVIEW_ENABLED ? [blockReviewScheduler] : []),
+    ...(config.RACE_BRIEF_ENABLED ? [raceBriefScheduler] : [])
   ),
   onSchedulerError: (error, userId) => {
     logger.error({ error, userId }, 'Failed to update intervals.icu sync schedule');
@@ -854,6 +872,39 @@ weeklyReviewWorker?.on('error', (err) => {
   logger.error({ error: err }, 'Weekly review worker error');
 });
 
+const raceBriefDeps: RaceBriefDeps = {
+  runs: raceBriefRunRepo,
+  profiles: briefProfileRepo,
+  races: raceRepo,
+  planned: plannedSessionRepo,
+  getFtp: async (userId) => (await profileRepo.findProfile(userId))?.ftp ?? null,
+  runEfforts: runEffortRepo,
+  syncActivities: (userId) => syncActivities(userId, activitySyncDeps),
+  provider: llmProvider,
+  sendMessage: (chatId, text, options) => api.sendMessage(chatId, text, options),
+  logger,
+  now: () => new Date(),
+};
+
+const raceBriefWorker = config.RACE_BRIEF_ENABLED
+  ? new Worker<RaceBriefJob>(
+      RACE_BRIEF_QUEUE,
+      (job: Job<RaceBriefJob>) => runRaceBriefJob(job.data.userId, raceBriefDeps),
+      { connection: redisConnection, concurrency: 2 }
+    )
+  : null;
+
+raceBriefWorker?.on('failed', (job, err) => {
+  logger.error(
+    { jobId: job?.id, userId: job?.data.userId, attempt: job?.attemptsMade, error: err },
+    'Race brief failed'
+  );
+});
+
+raceBriefWorker?.on('error', (err) => {
+  logger.error({ error: err }, 'Race brief worker error');
+});
+
 const blockReviewDeps: BlockReviewDeps = {
   runs: blockReviewRunRepo,
   profiles: briefProfileRepo,
@@ -929,6 +980,13 @@ async function startIcuSync() {
     blockReviewSchedulerDeps
   );
   logger.info(block, 'Block review schedules reconciled');
+  const raceBrief = await reconcileRaceBriefSchedulers(
+    raceBriefQueue,
+    raceBriefScheduler,
+    config.RACE_BRIEF_ENABLED ? userIds : [],
+    raceBriefSchedulerDeps
+  );
+  logger.info(raceBrief, 'Race brief schedules reconciled');
 }
 
 startIcuSync().catch((error: unknown) => {
@@ -948,6 +1006,7 @@ async function shutdown() {
     weeklyStatsWorker?.close(),
     weeklyReviewWorker?.close(),
     blockReviewWorker?.close(),
+    raceBriefWorker?.close(),
   ]);
   await Promise.all([
     syncQueue.close(),
@@ -956,6 +1015,7 @@ async function shutdown() {
     weeklyStatsQueue.close(),
     weeklyReviewQueue.close(),
     blockReviewQueue.close(),
+    raceBriefQueue.close(),
   ]);
   redis.disconnect();
   await prisma.$disconnect();

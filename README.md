@@ -406,6 +406,21 @@ After:   3 peak 05.10-25.10 3  8.2 … / 4 taper … / 5 race …
 
 Set `BLOCK_REVIEW_ENABLED=false` to turn it off.
 
+## Race briefs
+
+On race week the bot sends one or two messages per race at `RACE_BRIEF_TIME` (09:00, your timezone):
+
+- **A-race, T-7.** The week's sessions, then a checklist: gear for the race type (swim, bike and run kit; a full distance adds special-needs bags), a nutrition-plan reminder and a registration/briefing reminder.
+- **T-1 (A, B and C races).** Pacing targets and fueling:
+  - **Bike:** a % of your FTP by race type (sprint 88–92%, olympic 83–87%, half 78–82%, full 68–72%), shown with its source, e.g. `78–82% of FTP = 234–246 W (from FTP 300)`.
+  - **Run:** a pace band from your fastest 20–60 min run of the last 90 days (a rough threshold proxy: it uses whole-run averages). With no such run it says `no recent data — race by feel/HR` instead of inventing a number.
+  - **Swim:** a pacing note without numbers. **Fueling:** a carbs g/h range per race type. **Weather:** a reminder to check the forecast.
+  - B and C races get the shorter version: bike, run and fueling only.
+- **Numbers never come from the LLM.** Core `race/pacing.ts` computes them; the model only writes the intro and closing line, and a reply containing any digit is replaced by a fixed text.
+- **Once per race and date** (`RaceBriefRun`): a retry resends the stored brief, and a race moved with `/race move` is briefed again for its new date. A failed activity sync only adds a stale note.
+
+All bands and ranges are in `DEFAULT_RACE_PACING_CONFIG`. Set `RACE_BRIEF_ENABLED=false` to turn it off.
+
 ## intervals.icu Integration
 
 `packages/integrations-icu` (`@triathlon/integrations-icu`) is a typed REST client for [intervals.icu](https://intervals.icu). The worker uses it to validate credentials in `/connect icu` and to sync activities and wellness.
