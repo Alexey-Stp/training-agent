@@ -109,7 +109,9 @@ export function tokenFor(userId: string, secret = SECRET, now = NOW): string {
 
 /** Signs in through /auth and returns the session cookie header value. */
 export async function signIn(h: Harness, userId: string): Promise<string> {
-  const res = await fetch(h.baseUrl + '/auth?t=' + tokenFor(userId), { redirect: 'manual' });
+  // Sign with the app's own clock: the Postgres integration test runs on the real one
+  const token = tokenFor(userId, SECRET, h.deps.now());
+  const res = await fetch(h.baseUrl + '/auth?t=' + token, { redirect: 'manual' });
   const cookie = res.headers.get('set-cookie');
   if (res.status !== 303 || !cookie) throw new Error('sign-in failed: ' + String(res.status));
   return cookie.split(';')[0];
