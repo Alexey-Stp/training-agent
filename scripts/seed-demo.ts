@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { PrismaClient } from '@prisma/client';
+import { createScriptClient } from './prisma-client';
 import { buildDemoData, DEMO_TELEGRAM_ID } from './seed-demo-data';
 
 /**
@@ -23,7 +23,7 @@ function resolveToday(arg: string | undefined): string {
 async function main(): Promise<void> {
   const today = resolveToday(process.argv[2]);
   const data = buildDemoData(today);
-  const prisma = new PrismaClient();
+  const prisma = createScriptClient();
 
   try {
     await prisma.$transaction(async (tx) => {

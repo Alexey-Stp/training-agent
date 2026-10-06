@@ -22,6 +22,12 @@ export interface WorkerMetrics {
   observeWorker(worker: ObservableWorker, queue: string): void;
 }
 
+/** Processor time of one attempt in seconds, or null while BullMQ has not stamped both times */
+function seconds(job: MetricJob): number | null {
+  if (job.processedOn === undefined || job.finishedOn === undefined) return null;
+  return Math.max(0, job.finishedOn - job.processedOn) / 1000;
+}
+
 export function createMetrics(): WorkerMetrics {
   const registry = new Registry();
   collectDefaultMetrics({ register: registry });
@@ -45,11 +51,6 @@ export function createMetrics(): WorkerMetrics {
     labelNames: ['job', 'queue'] as const,
     registers: [registry],
   });
-
-  function seconds(job: MetricJob): number | null {
-    if (job.processedOn === undefined || job.finishedOn === undefined) return null;
-    return Math.max(0, job.finishedOn - job.processedOn) / 1000;
-  }
 
   return {
     registry,
