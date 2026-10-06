@@ -27,6 +27,7 @@ model User {
   weeklyStats       WeeklyStats[]
   weeklyReviewRuns  WeeklyReviewRun[]
   blockReviewRuns   BlockReviewRun[]
+  raceBriefRuns     RaceBriefRun[]
 
   @@index([telegramId])
 }
@@ -243,6 +244,7 @@ model Race {
   type        RaceType
   travelDate  String?      // YYYY-MM-DD; within T-3..T-1 it is a rest day in the race-week plan
   seasonPlans SeasonPlan[] @relation("ARace")
+  briefRuns   RaceBriefRun[]
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
@@ -548,4 +550,39 @@ model BlockReviewRun {
 
   @@unique([userId, seasonPlanId, key])
   @@index([coachDecisionId])
+}
+
+enum RaceBriefKind {
+  t7
+  t1
+}
+
+enum RaceBriefStatus {
+  pending
+  running
+  sent
+  failed
+}
+
+// One race brief per race, kind (T-7 / T-1) and race date, so a moved race is briefed again
+// (apps/worker races/race-brief.ts)
+model RaceBriefRun {
+  id           String          @id @default(cuid())
+  userId       String
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  raceId       String
+  race         Race            @relation(fields: [raceId], references: [id], onDelete: Cascade)
+  kind         RaceBriefKind
+  raceDate     String // the race date this brief was for (YYYY-MM-DD)
+  status       RaceBriefStatus @default(pending)
+  startedAt    DateTime? // lease of the run in progress
+  briefText    String? // rendered brief (Telegram HTML); a retry resends it
+  stale        Boolean         @default(false) // the activity sync failed
+  stageTimings Json            @default("{}") // stage → ms
+  error        String?
+  sentAt       DateTime?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@unique([userId, raceId, kind, raceDate])
 }

@@ -79,6 +79,13 @@ const envSchema = z.object({
   BLOCK_REVIEW_REPROJECT_THRESHOLD_PCT: z.coerce.number().min(0).max(50).default(15),
   // Confirm/Decline buttons of a block review stop working after this many hours
   BLOCK_REVIEW_TTL_HOURS: z.coerce.number().positive().default(72),
+  // Race briefs: at this local time, A-races get a T-7 overview + checklist and a T-1 pacing brief,
+  // B/C races only the shorter T-1 brief
+  RACE_BRIEF_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  RACE_BRIEF_TIME: z.string().regex(BRIEF_TIME_RE, 'must be HH:mm (24h)').default('09:00'),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
