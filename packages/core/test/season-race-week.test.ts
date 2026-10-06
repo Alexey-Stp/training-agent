@@ -119,8 +119,8 @@ describe('A-race taper (half distance)', () => {
       draftsFor(lastTaperStart),
       draftsFor(raceWeekStart),
     ]);
-    expect(taper.filter(isIntensitySession).length).toBe(2);
-    expect(raceWeek.filter(isIntensitySession).length).toBe(2);
+    expect(taper.filter(isIntensitySession)).toHaveLength(2);
+    expect(raceWeek.filter(isIntensitySession)).toHaveLength(2);
   });
 
   it('declines from the first taper week to the last', async () => {
@@ -275,7 +275,7 @@ describe('C-race', () => {
     expect(on(plain, monday).some((s) => isHardSession(s) || s.tags?.includes('long'))).toBe(false);
     const keys = (sessions: Session[]) =>
       sessions.filter((s) => !isRaceSession(s) && (isHardSession(s) || s.tags?.includes('long')));
-    expect(keys(week.plan.sessions).length).toBe(keys(plain).length - 1);
+    expect(keys(week.plan.sessions)).toHaveLength(keys(plain).length - 1);
   });
 
   it('never lets the rules engine downgrade the race', () => {

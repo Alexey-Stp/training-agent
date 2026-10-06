@@ -32,6 +32,7 @@ SonarQube scans this repo, including `test/` directories, which ESLint ignores. 
 - **Always pass a compare function to `.sort()`**, e.g. `(a, b) => a.localeCompare(b)`, even for `yyyy-MM-dd` strings.
 - **Last element:** use `arr.at(-1)`, not `arr[arr.length - 1]`. Needing the first and last date of rows is common, so reuse `dateRange()` from `apps/worker/src/plan-store.ts`.
 - **Last match:** use `arr.findLast(pred)`, not `arr.filter(pred).at(-1)`. `findLast` is ES2023, but the base tsconfig `lib` is ES2022, so add `"ES2023.Array"` to the package's `lib`, as `packages/ai/tsconfig.json` does.
+- **`reduce()` always gets an initial value**, also when the array is known to be non-empty. To pick one element, pass the first one: `short.reduce((a, b) => (b.weight < a.weight ? b : a), short[0])`.
 - **Membership checks on a fixed list use a `Set`.** Check with `.has()`, not `array.includes()`:
 
   ```ts
@@ -51,6 +52,10 @@ SonarQube scans this repo, including `test/` directories, which ESLint ignores. 
   const lines = races.map((r) => '• ' + formatRace(r));
   return ['🏁 Upcoming races', '', ...lines].join('\n');
   ```
+
+## Tests
+
+- **Length assertions use `toHaveLength`**: `expect(list).toHaveLength(2)`, not `expect(list.length).toBe(2)`. A failure then prints the array. The same goes for computed lengths: `expect(after).toHaveLength(before.length - 1)`.
 
 ## SQL (migrations)
 

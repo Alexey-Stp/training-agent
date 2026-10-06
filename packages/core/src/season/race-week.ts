@@ -209,8 +209,9 @@ function weightedShares(entries: readonly RaceDayEntry[], minutes: number): numb
       .map((share, i) => ({ i, share }))
       .filter(({ i, share }) => kept[i] && share < MIN_SESSION_MIN);
     if (short.length === 0) return shares;
-    const drop = short.reduce((a, b) =>
-      (entries[b.i].weight ?? 0) <= (entries[a.i].weight ?? 0) ? b : a
+    const drop = short.reduce(
+      (a, b) => ((entries[b.i].weight ?? 0) <= (entries[a.i].weight ?? 0) ? b : a),
+      short[0]
     );
     kept[drop.i] = false;
   }
