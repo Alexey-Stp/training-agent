@@ -53,6 +53,7 @@ const SEASON: SeasonPlan = {
 function deps(season: SeasonPlan | null): PlanSourceDeps {
   return {
     seasons: { findActiveSeason: () => Promise.resolve(season) },
+    races: { listUpcoming: () => Promise.resolve([]) },
     getRulesContext: vi.fn(() => Promise.resolve(EMPTY_CONTEXT)),
   };
 }

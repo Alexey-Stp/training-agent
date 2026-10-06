@@ -14,7 +14,7 @@
     "@triathlon/ai": "*",
     "@triathlon/core": "*",
     "@triathlon/integrations-icu": "*",
-    "bullmq": "^5.1.5",
+    "bullmq": "^6.3.11",
     "date-fns": "^4.1.0",
     "date-fns-tz": "^3.0.0",
     "dotenv": "^18.0.5",

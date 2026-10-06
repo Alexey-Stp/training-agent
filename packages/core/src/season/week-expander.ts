@@ -2,9 +2,19 @@ import { addDays, differenceInCalendarDays, format, parseISO } from 'date-fns';
 import { DAY_NAMES, dayNameOf } from '../plan-generator';
 import { PlannedSessionDraft, toPlannedSessions } from '../planned-session';
 import { applyRules, checkHardRules, RuleViolation } from '../rules-engine';
-import { Intensity, RulesContext, Session, Sport, UserProfile, WeekPlan } from '../types';
+import {
+  Intensity,
+  RulesContext,
+  SHARPENING_TAG,
+  Session,
+  Sport,
+  TAPER_TAG,
+  UserProfile,
+  WeekPlan,
+} from '../types';
 import { BlockGeneratorConfig, DEFAULT_BLOCK_GENERATOR_CONFIG } from './generator-config';
-import { TrainingBlock, TrainingBlockType } from './types';
+import { applyRaceOverrides } from './race-week';
+import { Race, TrainingBlock, TrainingBlockType } from './types';
 
 /** Weekly volume in hours, total and per sport (the shape of `SeasonWeek`). */
 export interface WeekTargets {
@@ -21,6 +31,16 @@ export interface ExpandWeekOptions {
   targets?: WeekTargets;
   /** Swim/run pace used to turn metres and km into hours */
   config?: BlockGeneratorConfig;
+  /**
+   * Races that may touch this week: the A-race gets its race-week template, a B-race a
+   * mini-taper, a C-race replaces a key session (see `applyRaceOverrides`).
+   */
+  races?: readonly Race[];
+  /**
+   * Training hours of the A-race week (the race block's target). Default: the block's own
+   * target when this is the race block; otherwise the A-race is only swapped in like a C-race.
+   */
+  aRaceWeekHours?: number;
 }
 
 export interface ExpandedWeek {
@@ -204,7 +224,7 @@ const BUILD_WEEK: WeekTemplate = {
   ],
 };
 
-/** Short sessions with two openers; everything else easy */
+/** Short sessions; the two sharpening sessions keep the intensity frequency, everything else easy */
 const TAPER_WEEK: WeekTemplate = {
   maxSessionMin: TAPER_MAX_SESSION_MIN,
   sessions: [
@@ -223,20 +243,20 @@ const TAPER_WEEK: WeekTemplate = {
     {
       role: 'keyBike',
       sport: Sport.bike,
-      title: 'Bike Openers',
+      title: 'Bike Sharpening',
       intensity: Intensity.z4,
       weight: 0.3,
-      tags: ['openers'],
+      tags: [SHARPENING_TAG],
       notes: 'Short race-pace efforts, stay fresh',
     },
     { ...LONG_BIKE, title: 'Bike Endurance', weight: 0.35, tags: undefined },
     {
       role: 'keyRun',
       sport: Sport.run,
-      title: 'Run Openers',
+      title: 'Run Sharpening',
       intensity: Intensity.z4,
       weight: 0.35,
-      tags: ['openers'],
+      tags: [SHARPENING_TAG],
       notes: 'Short race-pace efforts, stay fresh',
     },
     { ...EASY_RUN, weight: 0.3 },
@@ -548,9 +568,34 @@ export function draftBlockWeek(
     if (sized.leftover >= STEP_MIN)
       warnings.push(leftoverWarning(sport, sized.leftover, own.length > 0));
   }
-  sessions.sort((a, b) => a.date.localeCompare(b.date));
+  const config = options.config ?? DEFAULT_BLOCK_GENERATOR_CONFIG;
+  const phase = phaseOf(block.type);
+  const withRaces = applyRaceOverrides(phase ? sessions.map(taperTagged) : sessions, {
+    weekStart,
+    weekEnd: format(addDays(parseISO(weekStart), 6), 'yyyy-MM-dd'),
+    blockType: block.type,
+    races: options.races ?? [],
+    aRaceWeekHours: aRaceWeekHours(block, options),
+    config,
+  });
 
-  return { plan: { startDate: weekStart, sessions, warnings, appliedRules: [] }, targets };
+  const plan: WeekPlan = { startDate: weekStart, sessions: withRaces, warnings, appliedRules: [] };
+  return { plan: phase ? { ...plan, phase } : plan, targets };
+}
+
+function phaseOf(type: TrainingBlockType): WeekPlan['phase'] {
+  if (type === TrainingBlockType.taper) return 'taper';
+  if (type === TrainingBlockType.race) return 'race';
+  return undefined;
+}
+
+function taperTagged(session: Session): Session {
+  return { ...session, tags: [...(session.tags ?? []), TAPER_TAG] };
+}
+
+function aRaceWeekHours(block: TrainingBlock, options: ExpandWeekOptions): number | null {
+  if (options.aRaceWeekHours !== undefined) return options.aRaceWeekHours;
+  return block.type === TrainingBlockType.race ? block.targetWeeklyHours : null;
 }
 
 /**

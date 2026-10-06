@@ -241,6 +241,7 @@ model Race {
   name        String
   priority    RacePriority
   type        RaceType
+  travelDate  String?      // YYYY-MM-DD; within T-3..T-1 it is a rest day in the race-week plan
   seasonPlans SeasonPlan[] @relation("ARace")
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt

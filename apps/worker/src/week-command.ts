@@ -2,9 +2,12 @@ import { format, parseISO } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
 import type { Profile } from '@prisma/client';
 import {
+  addDaysIso,
   blockEndDate,
   blockWeekStart,
   expandWeek,
+  raceWeekHours,
+  seasonWeekTargets,
   TrainingBlockType,
   weekIndexForDate,
   weekVolume,
@@ -14,6 +17,7 @@ import {
   type TrainingBlock,
 } from '@triathlon/core';
 import { MSG_NO_PROFILE, toUserProfile } from './profile';
+import { racesForRange, type UpcomingRaces } from './season-races';
 import { formatDayHeader, formatSession, groupSessionsByDate } from './session-format';
 
 export const MSG_NO_SEASON =
@@ -29,6 +33,7 @@ export interface SeasonRepo {
 
 export interface WeekShowDeps {
   repo: SeasonRepo;
+  races: UpcomingRaces;
   /** Rules-engine input for a week starting on `date` (handlers.ts `getRulesContext`) */
   getRulesContext(userId: string, date: string): Promise<RulesContext>;
   now: () => Date;
@@ -106,6 +111,17 @@ export async function handleWeekShow(
   if (!found) return MSG_NOT_IN_SEASON;
 
   const { block, weekIndex } = found;
-  const context = await deps.getRulesContext(user.id, blockWeekStart(block, weekIndex));
-  return formatWeek(block, weekIndex, expandWeek(block, weekIndex, profile, { context }));
+  const weekStart = blockWeekStart(block, weekIndex);
+  const range = { from: weekStart, to: addDaysIso(weekStart, 6) };
+  const [context, races] = await Promise.all([
+    deps.getRulesContext(user.id, weekStart),
+    racesForRange(deps.races, user.id, season, range),
+  ]);
+  const week = expandWeek(block, weekIndex, profile, {
+    context,
+    targets: seasonWeekTargets(block, weekIndex),
+    races,
+    aRaceWeekHours: raceWeekHours(season.blocks),
+  });
+  return formatWeek(block, weekIndex, week);
 }

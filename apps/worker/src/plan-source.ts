@@ -12,10 +12,13 @@ import {
   type UserProfile,
 } from '@triathlon/core';
 import { planWindowEnd } from './plan-store';
+import { racesForRange, type UpcomingRaces } from './season-races';
 import type { SeasonRepo } from './week-command';
 
 export interface PlanSourceDeps {
   seasons: SeasonRepo;
+  /** A, B and C races shape the season weeks around them */
+  races: UpcomingRaces;
   /** Rules-engine input for a plan or week starting on `date` (handlers.ts `getRulesContext`) */
   getRulesContext(userId: string, date: string): Promise<RulesContext>;
 }
@@ -75,8 +78,12 @@ export async function planWeek(
   const season = await deps.seasons.findActiveSeason(userId);
   const range = { from: today, to: planWindowEnd(today) };
   const fromSeason = season
-    ? await seasonDraftsForRange(season, profile, range, (weekStart) =>
-        deps.getRulesContext(userId, weekStart)
+    ? await seasonDraftsForRange(
+        season,
+        profile,
+        range,
+        (weekStart) => deps.getRulesContext(userId, weekStart),
+        await racesForRange(deps.races, userId, season, range)
       )
     : null;
   const covered = fromSeason?.covered;

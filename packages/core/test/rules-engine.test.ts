@@ -610,3 +610,93 @@ describe('checkHardRules', () => {
     expect(checkHardRules(applyRules(plan, context), context)).toEqual([]);
   });
 });
+
+describe('races and tapers', () => {
+  const MONDAY = '2026-02-09';
+  const noHistory: RulesContext = { last7dStats: { totalMinutes: 0, byDate: [] } };
+
+  function session(date: string, overrides: Partial<Session> = {}): Session {
+    return {
+      date,
+      sport: Sport.bike,
+      title: 'Bike',
+      durationMin: 60,
+      intensity: Intensity.z2,
+      ...overrides,
+    };
+  }
+  const raceOn = (date: string) =>
+    session(date, {
+      sport: Sport.other,
+      title: '🏁 Race',
+      durationMin: 330,
+      intensity: Intensity.z4,
+      tags: ['race'],
+    });
+  const plan = (sessions: Session[], phase?: WeekPlan['phase']): WeekPlan => ({
+    startDate: MONDAY,
+    sessions,
+    warnings: [],
+    appliedRules: [],
+    ...(phase ? { phase } : {}),
+  });
+
+  it('NoHardHard downgrades the session next to a race, never the race', () => {
+    const vo2 = session('2026-02-13', { intensity: Intensity.z5, tags: ['vo2'] });
+    const result = applyRules(plan([vo2, raceOn('2026-02-14')]), noHistory);
+
+    expect(result.sessions.find((s) => s.title === '🏁 Race')?.intensity).toBe(Intensity.z4);
+    expect(result.sessions.find((s) => s.date === '2026-02-13')?.intensity).toBe(Intensity.z2);
+    expect(checkHardRules(result, noHistory)).toEqual([]);
+  });
+
+  it('NoHardHard also downgrades a hard session the day after a race', () => {
+    const run = session('2026-02-15', { sport: Sport.run, intensity: Intensity.z4 });
+    const result = applyRules(plan([raceOn('2026-02-14'), run]), noHistory);
+    expect(result.sessions.find((s) => s.date === '2026-02-15')?.intensity).toBe(Intensity.z2);
+  });
+
+  it('ReadinessDownshift never downgrades a race', () => {
+    const context: RulesContext = { ...noHistory, todayWellness: wellness(1) };
+    const result = applyRules(plan([raceOn(MONDAY)]), context);
+    expect(result.sessions[0].intensity).toBe(Intensity.z4);
+    expect(checkHardRules(result, context)).toEqual([]);
+  });
+
+  it('SwimRotation leaves taper swims alone', () => {
+    const friday = session('2026-02-13', {
+      sport: Sport.swim,
+      title: 'Swim Easy',
+      tags: ['taper'],
+    });
+    const result = applyRules(plan([friday]), noHistory);
+    expect(result.sessions[0]).toMatchObject({ title: 'Swim Easy', intensity: Intensity.z2 });
+  });
+
+  describe('WeeklyLoadCap', () => {
+    const history: RulesContext = { last7dStats: { totalMinutes: 200, byDate: [] } };
+
+    it('leaves the race out of the planned minutes and never scales it', () => {
+      const result = applyRules(plan([session(MONDAY), raceOn('2026-02-15')]), history);
+      expect(result.sessions.map((s) => s.durationMin)).toEqual([60, 330]);
+      expect(checkHardRules(result, history)).toEqual([]);
+    });
+
+    it('treats a taper week reduction as valid and does not cap it', () => {
+      const big = [session(MONDAY, { durationMin: 300 })];
+      const result = applyRules(plan(big, 'taper'), history);
+      expect(result.sessions[0].durationMin).toBe(300);
+      expect(result.appliedRules).toContain('WeeklyLoadCap: taper week, reduction expected');
+      expect(checkHardRules(result, history)).toEqual([]);
+    });
+
+    it('never lengthens a session shorter than the 30 min floor', () => {
+      const sessions = [
+        session(MONDAY, { durationMin: 20 }),
+        session('2026-02-10', { durationMin: 400 }),
+      ];
+      const result = applyRules(plan(sessions), history);
+      expect(result.sessions[0].durationMin).toBe(20);
+    });
+  });
+});

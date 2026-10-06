@@ -1,0 +1,74 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`race week > template snapshot: full race on Sunday 1`] = `
+"Mon bike Bike Endurance 60m z2
+Mon swim Swim Easy 30m z2
+Tue run Run Sharpening 45m z4
+Wed bike Bike Easy 45m z2
+Wed swim Swim Easy 30m z2
+Fri swim Swim Easy + Pickups 30m z2
+Fri run Run Easy 25m z2
+Sat bike Race Openers 30m z3
+Sun other 🏁 Test Race 780m z4"
+`;
+
+exports[`race week > template snapshot: half race on Sunday 1`] = `
+"Mon bike Bike Endurance 60m z2
+Mon swim Swim Easy 30m z2
+Tue run Run Sharpening 45m z4
+Wed bike Bike Easy 45m z2
+Wed swim Swim Easy 30m z2
+Fri swim Swim Easy + Pickups 30m z2
+Fri run Run Easy 25m z2
+Sat bike Race Openers 30m z3
+Sun other 🏁 Test Race 330m z4"
+`;
+
+exports[`race week > template snapshot: olympic race on Sunday 1`] = `
+"Mon swim Swim Easy 35m z2
+Mon run Run Easy 35m z2
+Tue bike Bike Sharpening 50m z4
+Wed swim Swim Easy 35m z2
+Wed run Run Easy 35m z2
+Thu bike Easy Spin 20m z1
+Fri swim Swim Easy + Pickups 30m z2
+Fri run Run Easy 30m z2
+Sat bike Race Openers 30m z3
+Sun other 🏁 Test Race 150m z4"
+`;
+
+exports[`race week > template snapshot: other race on Sunday 1`] = `
+"Mon swim Swim Easy 35m z2
+Mon run Run Easy 35m z2
+Tue bike Bike Sharpening 50m z4
+Wed swim Swim Easy 35m z2
+Wed run Run Easy 35m z2
+Thu bike Easy Spin 20m z1
+Fri swim Swim Easy + Pickups 30m z2
+Fri run Run Easy 30m z2
+Sat bike Race Openers 30m z3
+Sun other 🏁 Test Race 120m z4"
+`;
+
+exports[`race week > template snapshot: run race on Sunday 1`] = `
+"Mon run Run Easy 60m z2
+Tue run Run Sharpening 50m z4
+Wed run Run Easy 45m z2
+Thu run Easy Jog 20m z1
+Fri run Run Easy + Strides 30m z2
+Sat run Race Openers 30m z3
+Sun run 🏁 Test Race 90m z4"
+`;
+
+exports[`race week > template snapshot: sprint race on Sunday 1`] = `
+"Mon swim Swim Easy 35m z2
+Mon run Run Easy 35m z2
+Tue bike Bike Sharpening 50m z4
+Wed swim Swim Easy 35m z2
+Wed run Run Easy 35m z2
+Thu bike Easy Spin 20m z1
+Fri swim Swim Easy + Pickups 30m z2
+Fri run Run Easy 30m z2
+Sat bike Race Openers 30m z3
+Sun other 🏁 Test Race 75m z4"
+`;

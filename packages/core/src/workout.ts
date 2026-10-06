@@ -1,4 +1,4 @@
-import { Intensity, Session, Sport } from './types';
+import { Intensity, OPENERS_TAG, RACE_TAG, Session, SHARPENING_TAG, Sport } from './types';
 
 /** One timed step of a workout. */
 export interface WorkoutInterval {
@@ -49,18 +49,37 @@ function wrapMainSet(main: WorkoutBlock, mainMin: number, totalMin: number): Wor
   ];
 }
 
+/** Pre-race opener: 3 × 1′ race-pace touches with 2′ easy between */
+const OPENER_SET = { count: 3, workMin: 1, restMin: 2, zone: Intensity.z4 };
+
+/** Taper sharpening keeps the reps but halves each one (at least a minute). */
+function sharpened(set: RepeatBlock): RepeatBlock {
+  return {
+    ...set,
+    work: { ...set.work, durationMin: Math.max(1, Math.round(set.work.durationMin / 2)) },
+  };
+}
+
 /**
- * Structured steps for a session. Uses only sport, intensity and duration, so the result
- * follows rule-engine changes (downgrades, swim rotation, load-cap scaling). Z1/Z2 sessions
- * are one steady block, Z3 gets a tempo block and Z4/Z5 an interval set, both wrapped in
- * warmup/cooldown. Block minutes always add up to `durationMin`.
+ * Structured steps for a session. Uses sport, intensity, duration and the taper tags, so the
+ * result follows rule-engine changes (downgrades, swim rotation, load-cap scaling). Z1/Z2
+ * sessions are one steady block, Z3 gets a tempo block and Z4/Z5 an interval set, both wrapped
+ * in warmup/cooldown. Openers get 3 × 1′ race-pace touches, sharpening sessions shortened reps
+ * and the race one steady block. Block minutes always add up to `durationMin`.
  */
 export function buildWorkoutSteps(
-  session: Pick<Session, 'sport' | 'intensity' | 'durationMin'>
+  session: Pick<Session, 'sport' | 'intensity' | 'durationMin' | 'tags'>
 ): WorkoutBlock[] {
   const { sport, intensity, durationMin } = session;
+  const tags = session.tags ?? [];
   const steady: WorkoutBlock[] = [{ kind: 'steady', durationMin, zone: intensity }];
 
+  if (tags.includes(RACE_TAG)) return steady;
+  if (tags.includes(OPENERS_TAG)) {
+    const set = repeat(OPENER_SET.count, OPENER_SET.workMin, OPENER_SET.zone, OPENER_SET.restMin);
+    if (durationMin - repeatMinutes(set) < MIN_WARMUP_COOLDOWN_MIN) return steady;
+    return wrapMainSet(set, repeatMinutes(set), durationMin);
+  }
   if (intensity === Intensity.z1 || intensity === Intensity.z2) return steady;
 
   if (intensity === Intensity.z3) {
@@ -69,7 +88,8 @@ export function buildWorkoutSteps(
     return wrapMainSet(main, TEMPO_MAIN_MIN, durationMin);
   }
 
-  const set = intervalSetFor(sport, intensity);
+  const base = intervalSetFor(sport, intensity);
+  const set = tags.includes(SHARPENING_TAG) ? sharpened(base) : base;
   // Short sessions (e.g. scaled down by the weekly load cap) drop reps first
   while (set.count > 1 && durationMin - repeatMinutes(set) < MIN_WARMUP_COOLDOWN_MIN) set.count--;
   if (durationMin - repeatMinutes(set) < MIN_WARMUP_COOLDOWN_MIN) return steady;

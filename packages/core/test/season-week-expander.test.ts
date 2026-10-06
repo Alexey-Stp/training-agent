@@ -152,8 +152,8 @@ describe('expandWeek', () => {
 
       expectTaperShape(week);
       expect(week.plan.sessions.filter(isHardSession).map((s) => s.title)).toEqual([
-        'Run Openers',
-        'Bike Openers',
+        'Run Sharpening',
+        'Bike Sharpening',
       ]);
     });
 

@@ -95,10 +95,11 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 - `handlers.ts` - Command handler implementations, `getRulesContext` (last 7 days of workouts plus that day's wellness)
 - `session-format.ts` - Shared plan reply formatting (sport icons, day headings, session lines) for `/plan` and `/week show`
 - `profile.ts` - `toUserProfile` (Prisma `Profile` → core `UserProfile`), `MSG_NO_PROFILE`
-- `week-command.ts` - `/week show` handler: finds today's block week in the active season and expands it (injected `SeasonRepo`, rules context and clock)
-- `race-command.ts` - `/race add` (argument parsing, `parseRaceAddArgs`) and `/race list` (injected `RaceRepo`)
+- `week-command.ts` - `/week show` handler: finds today's block week in the active season and expands it with the races around it (injected `SeasonRepo`, races, rules context and clock)
+- `race-command.ts` - `/race add` (argument parsing, `parseRaceAddArgs`, optional `travel=<date>` 1–7 days before the race), `/race list` and `/race move` (shifts the travel day with the race) (injected `RaceRepo`)
+- `season-races.ts` - `racesForRange`: the races that can shape a date range (loaded `RACE_REACH_DAYS` past both ends; an A-race other than the season's is treated as B)
 - `season-command.ts` - `season_preview` (generate + store a draft, reply with the block table and buttons), `season_confirm` (draft → active, replacement guard), `season_cancel`, `/season show` (injected `SeasonStoreRepo`, `RaceRepo`, load query, publish queue)
-- `season-publish.ts` - `season-rolling-publish` job processor: expands and pushes the active season for T+1..T+14 (injected deps)
+- `season-publish.ts` - `season-rolling-publish` job processor: expands and pushes the active season for T+1..T+14, races included (injected deps)
 - `plan-source.ts` - `planWeek`: the week `/plan` and `/plan push` store, from the active season where it covers the days, from the 7-day generator otherwise
 - `reply.ts` - `Reply` (plain text, or HTML + inline keyboard) and `toTelegramMessage`
 - `icu-connect.ts` - `connect_icu` / `/connect status` / `/disconnect icu` handlers (injected repo + ICU client for testing)
@@ -137,7 +138,7 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 - `workout.ts` - `buildWorkoutSteps` (warmup / main set or N x (work, rest) / cooldown from sport, intensity and duration) and `renderIcuWorkout` (intervals.icu workout text)
 - `planned-session.ts` - `toPlannedSessions`: adapter from the rules-applied `WeekPlan` to `PlannedSession` rows
 - `rules-engine.ts` - `applyRules` (corrects a plan) and `checkHardRules` (reports the hard rules a plan still breaks as `RuleViolation[]`)
-- `season/` - Season domain model (`Race`, `SeasonPlan`, `TrainingBlock` and their enums), `validateBlockSequence` / `validateSeasonPlan` / `assertValidSeasonPlan` (`SeasonValidationError`), the zod-checked `serializeSeasonPlan` / `parseSeasonPlan`, and `generateSeasonPlan` (`block-generator.ts`): blocks allocated backwards from the A-race with short-runway compression (`block-sequence.ts`), a ≤8% ramp with 3:1 recovery weeks from the current load (`volume.ts`), and a per-sport split with weak-sport bias (`sport-split.ts`). All constants are in `DEFAULT_BLOCK_GENERATOR_CONFIG` (`generator-config.ts`). `week-expander.ts` has `expandWeek(block, weekIndex, profile)`. It picks a session template for the block type (base, build/peak, taper/race, recovery/transition), places the sessions by the profile's day preferences, sizes them to the week's targets, and gates the result through `applyRules` + `checkHardRules`. `window.ts` has the timezone-aware date helpers (`localToday`, `rollingWindow`, `clipToSeason`) and `seasonDraftsForRange`; `table.ts` has `formatSeasonTable`
+- `season/` - Season domain model (`Race`, `SeasonPlan`, `TrainingBlock` and their enums), `validateBlockSequence` / `validateSeasonPlan` / `assertValidSeasonPlan` (`SeasonValidationError`), the zod-checked `serializeSeasonPlan` / `parseSeasonPlan`, and `generateSeasonPlan` (`block-generator.ts`): blocks allocated backwards from the A-race with short-runway compression (`block-sequence.ts`), a ≤8% ramp with 3:1 recovery weeks from the current load (`volume.ts`), and a per-sport split with weak-sport bias (`sport-split.ts`). All constants are in `DEFAULT_BLOCK_GENERATOR_CONFIG` (`generator-config.ts`). `week-expander.ts` has `expandWeek(block, weekIndex, profile)`. It picks a session template for the block type (base, build/peak, taper/race, recovery/transition), places the sessions by the profile's day preferences, sizes them to the week's targets, applies the races (`race-week.ts` `applyRaceOverrides`: A-race race-week template per race type from T-6, B-race 3–5 day mini-taper, C-race key-session swap; the race is one `race`-tagged session), and gates the result through `applyRules` + `checkHardRules`. Taper and race weeks carry `WeekPlan.phase` and their sessions the `taper` tag. Taper volume is counted back from the race (`taperWeekFactorsFromRace` 0.6/0.75/0.85 of peak, race week `raceWeekFactor` 0.4, the race excluded); `weekVolumeFactor` reshapes a taper block's stored average into its declining weeks. Taper and race weeks are the explicit ramp-cap exception (`isRampException`). An intensity session is `isHardSession` or an `openers` session, the race excluded (`isIntensitySession`). `window.ts` has the timezone-aware date helpers (`localToday`, `rollingWindow`, `clipToSeason`) and `seasonDraftsForRange`; `table.ts` has `formatSeasonTable`
 - `closeout.ts` - Close-out matching (`matchActivities`), `isKeySession`, `guessIntensity`, `hrIntensity` (average HR vs LTHR, Friel bands)
 - `reviews/` - `iso-week.ts` (`isoWeekKey`, `isoWeekRange`, `previousIsoWeek`) and `weekly-stats.ts` (`computeWeeklyStats`: pure planned-vs-actual summary of one ISO week)
 - `season-wizard.ts` - Contract between the bot wizard and the worker: the `season_*` command names, the preview button callback data (`seasonDecisionData` / `parseSeasonDecision`) and the shared answer validation (`parseWeeklyHours`, `WEAK_SPORT_CHOICES`)
@@ -223,7 +224,7 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
    - `icuEventId`, `pushedHash` (hash of the event ICU returned after our last write), `pushedAt`, `externalChange` (reason for the flag), `deletedAt` (tombstone until push deletes the ICU event)
 
 9. **Race** - a race on the athlete's calendar
-   - `date`, `name`, `priority` (`A` | `B` | `C`), `type` (`sprint` | `olympic` | `half` | `full` | `run` | `other`)
+   - `date`, `name`, `priority` (`A` | `B` | `C`), `type` (`sprint` | `olympic` | `half` | `full` | `run` | `other`), optional `travelDate` (migration `9g_race_travel`; within T-3..T-1 it is a rest day in the race-week plan)
    - Indexed on (userId, date)
 
 10. **SeasonPlan** - season periodization
@@ -398,6 +399,8 @@ Draft Plan (template) → Rules Engine → Final Plan
 - ReadinessDownshift next to handle fatigue ASAP
 - NoHardHard after (some sessions may already be downgraded)
 - WeeklyLoadCap last (applies to total volume)
+
+**Races and tapers.** Race overrides run before the rules, so the rules see the race. A `race`-tagged session is never downgraded (ReadinessDownshift, NoHardHard) or scaled (WeeklyLoadCap) and is left out of the load total; NoHardHard downgrades a hard session next to a race instead. SwimRotation skips `taper` sessions. WeeklyLoadCap and its `checkHardRules` counterpart skip weeks with `WeekPlan.phase` (taper/race): the reduction is valid by design. The 30-minute floor never lengthens a shorter session.
 
 ### Adding New Rules
 

@@ -17,6 +17,7 @@ export const raceSchema = z.object({
   name: z.string().min(1),
   priority: z.enum(RacePriority),
   type: z.enum(RaceType),
+  travelDate: isoDate.nullable().optional(),
 }) satisfies z.ZodType<Race>;
 
 export const trainingBlockSchema = z.object({

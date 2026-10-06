@@ -1,15 +1,27 @@
-import { format, parseISO } from 'date-fns';
+import { differenceInCalendarDays, format, parseISO } from 'date-fns';
 import type { Profile } from '@prisma/client';
-import { isIsoDate, localToday, RacePriority, RaceType, type Race } from '@triathlon/core';
+import {
+  addDaysIso,
+  isIsoDate,
+  localToday,
+  RacePriority,
+  RaceType,
+  type Race,
+} from '@triathlon/core';
 import { MSG_NO_PROFILE } from './profile';
 
 const RACE_TYPES = Object.values(RaceType);
 const PRIORITIES = Object.values(RacePriority);
 const MAX_NAME_LENGTH = 100;
 
-export const MSG_RACE_USAGE = `❌ Usage: /race add <yyyy-MM-dd> <type> <A|B|C> <name>
+const TRAVEL_PREFIX = 'travel=';
+/** A travel day further out than this is not race travel */
+const MAX_TRAVEL_DAYS_BEFORE = 7;
+
+export const MSG_RACE_USAGE = `❌ Usage: /race add <yyyy-MM-dd> <type> <A|B|C> <name> [travel=<yyyy-MM-dd>]
 Type: ${RACE_TYPES.join('|')}
-Example: /race add 2027-06-12 olympic A Prague Triathlon
+Example: /race add 2027-06-12 olympic A Prague Triathlon travel=2027-06-11
+travel= is optional: a travel day in the 3 days before the race becomes a rest day.
 Or /race list to see your upcoming races.
 Or /race move <yyyy-MM-dd> <yyyy-MM-dd> to change a race's date.`;
 
@@ -28,8 +40,13 @@ export interface RaceRepo {
   /** Races dated on/after `fromDate`, date ascending. */
   listUpcoming(userId: string, fromDate: string): Promise<RaceRecord[]>;
   findByDate(userId: string, date: string): Promise<RaceRecord[]>;
-  /** Returns false when the race is gone. */
-  moveDate(userId: string, raceId: string, date: string): Promise<boolean>;
+  /** Sets the race date and travel day. Returns false when the race is gone. */
+  moveDate(
+    userId: string,
+    raceId: string,
+    date: string,
+    travelDate: string | null
+  ): Promise<boolean>;
 }
 
 /** An A-race date change that the block review re-projects the season for. */
@@ -50,9 +67,29 @@ export interface RaceCommandDeps {
 
 export type ParsedRace = { ok: true; race: Race } | { ok: false; error: string };
 
-/** `<yyyy-MM-dd> <type> <A|B|C> <name…>`; the race must be after `today` (athlete-local). */
+/** The `travel=<date>` token pulled out of `args`; the other args keep their order. */
+function splitTravel(args: string[]): { rest: string[]; travel: string | null } {
+  const token = args.find((a) => a.toLowerCase().startsWith(TRAVEL_PREFIX));
+  if (token === undefined) return { rest: args, travel: null };
+  return { rest: args.filter((a) => a !== token), travel: token.slice(TRAVEL_PREFIX.length) };
+}
+
+function travelError(travel: string, raceDate: string): string | null {
+  if (!isIsoDate(travel)) return `❌ travel=${travel} is not a yyyy-MM-dd date.`;
+  const daysBefore = differenceInCalendarDays(parseISO(raceDate), parseISO(travel));
+  if (daysBefore < 1 || daysBefore > MAX_TRAVEL_DAYS_BEFORE) {
+    return `❌ The travel day must be 1 to ${MAX_TRAVEL_DAYS_BEFORE.toString()} days before the race.`;
+  }
+  return null;
+}
+
+/**
+ * `<yyyy-MM-dd> <type> <A|B|C> <name…> [travel=<yyyy-MM-dd>]`; the race must be after `today`
+ * (athlete-local) and the travel day 1–7 days before it.
+ */
 export function parseRaceAddArgs(args: string[], today: string): ParsedRace {
-  const [date, type, priority, ...nameParts] = args;
+  const { rest, travel } = splitTravel(args);
+  const [date, type, priority, ...nameParts] = rest;
   const name = nameParts.join(' ').trim();
   if (!date || !type || !priority || !name) return { ok: false, error: MSG_RACE_USAGE };
 
@@ -73,11 +110,23 @@ export function parseRaceAddArgs(args: string[], today: string): ParsedRace {
       error: `❌ Race name is limited to ${MAX_NAME_LENGTH.toString()} characters.`,
     };
   }
-  return { ok: true, race: { date, type: raceType, priority: racePriority, name } };
+  const travelIssue = travel === null ? null : travelError(travel, date);
+  if (travelIssue) return { ok: false, error: travelIssue };
+  const race: Race = { date, type: raceType, priority: racePriority, name };
+  return { ok: true, race: travel === null ? race : { ...race, travelDate: travel } };
 }
 
 function formatRace(race: Race): string {
-  return `${format(parseISO(race.date), 'EEE MMM d, yyyy')} · ${race.priority} · ${race.type} · ${race.name}`;
+  const line = `${format(parseISO(race.date), 'EEE MMM d, yyyy')} · ${race.priority} · ${race.type} · ${race.name}`;
+  if (!race.travelDate) return line;
+  return line + ' · ✈️ ' + format(parseISO(race.travelDate), 'EEE MMM d');
+}
+
+/** The travel day kept the same number of days before the moved race. */
+function movedTravel(race: Race, to: string): string | null {
+  if (!race.travelDate) return null;
+  const shift = differenceInCalendarDays(parseISO(to), parseISO(race.date));
+  return addDaysIso(race.travelDate, shift);
 }
 
 async function handleRaceAdd(
@@ -135,11 +184,12 @@ async function handleRaceMove(
   if (races.length === 0) return `❌ No race on ${parsed.from}. See /race list.`;
   if (races.length > 1) return `❌ More than one race on ${parsed.from}; can't tell which to move.`;
   const race = races[0];
-  if (!(await deps.repo.moveDate(userId, race.id, parsed.to))) {
+  const travelDate = movedTravel(race, parsed.to);
+  if (!(await deps.repo.moveDate(userId, race.id, parsed.to, travelDate))) {
     return `❌ No race on ${parsed.from}. See /race list.`;
   }
 
-  const moved = `✅ Race moved: ${formatRace({ ...race, date: parsed.to })}`;
+  const moved = `✅ Race moved: ${formatRace({ ...race, date: parsed.to, travelDate })}`;
   if ((await deps.activeARaceId(userId)) !== race.id) return moved;
   await deps.queueBlockReview(userId, {
     raceId: race.id,

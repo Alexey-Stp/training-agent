@@ -72,7 +72,12 @@ beforeEach(() => {
   season = SEASON;
   const repo: SeasonRepo = { findActiveSeason: () => Promise.resolve(season) };
   getRulesContext = vi.fn(() => Promise.resolve({ last7dStats: { totalMinutes: 0, byDate: [] } }));
-  deps = { repo, getRulesContext, now: () => NOW };
+  deps = {
+    repo,
+    races: { listUpcoming: () => Promise.resolve([]) },
+    getRulesContext,
+    now: () => NOW,
+  };
 });
 
 describe('handleWeekShow', () => {

@@ -65,6 +65,35 @@ describe('parseRaceAddArgs', () => {
   });
 });
 
+describe('parseRaceAddArgs travel day', () => {
+  it('takes an optional travel=<date> anywhere after the race', () => {
+    const parsed = parseRaceAddArgs(
+      ['2027-06-12', 'half', 'A', 'travel=2027-06-11', 'Prague', '70.3'],
+      TODAY
+    );
+    expect(parsed).toEqual({
+      ok: true,
+      race: {
+        date: '2027-06-12',
+        type: RaceType.half,
+        priority: RacePriority.A,
+        name: 'Prague 70.3',
+        travelDate: '2027-06-11',
+      },
+    });
+  });
+
+  it.each([
+    ['travel=2027-6-11', 'is not a yyyy-MM-dd date'],
+    ['travel=2027-06-12', '1 to 7 days before the race'],
+    ['travel=2027-06-01', '1 to 7 days before the race'],
+  ])('rejects %s', (token, message) => {
+    const parsed = parseRaceAddArgs(['2027-06-12', 'half', 'A', 'Prague', token], TODAY);
+    expect(parsed.ok).toBe(false);
+    expect(!parsed.ok && parsed.error).toContain(message);
+  });
+});
+
 describe('handleRace', () => {
   let stored: RaceRecord[];
   let aRaceId: string | null;
@@ -85,9 +114,9 @@ describe('handleRace', () => {
         listUpcoming: (_userId, fromDate) =>
           Promise.resolve(stored.filter((r) => r.date >= fromDate)),
         findByDate: (_userId, date) => Promise.resolve(stored.filter((r) => r.date === date)),
-        moveDate: (_userId, raceId, date) => {
+        moveDate: (_userId, raceId, date, travelDate) => {
           const race = stored.find((r) => r.id === raceId);
-          if (race) race.date = date;
+          if (race) Object.assign(race, { date, travelDate });
           return Promise.resolve(race !== undefined);
         },
       },
@@ -145,6 +174,19 @@ describe('handleRace', () => {
       expect(reply).toBe([moved, '', MSG_REPROJECTION_COMING].join('\n'));
       expect(stored[0].date).toBe('2027-06-26');
       expect(queued).toEqual([{ raceId: 'r1', previousDate: '2027-06-12', newDate: '2027-06-26' }]);
+    });
+
+    it('keeps the travel day the same number of days before the moved race', async () => {
+      await handleRace(
+        USER,
+        ['add', '2027-07-10', 'olympic', 'B', 'Lake', 'travel=2027-07-09'],
+        deps
+      );
+
+      const reply = await handleRace(USER, ['move', '2027-07-10', '2027-07-17'], deps);
+
+      expect(reply).toBe('✅ Race moved: Sat Jul 17, 2027 · B · olympic · Lake · ✈️ Fri Jul 16');
+      expect(stored[1]).toMatchObject({ date: '2027-07-17', travelDate: '2027-07-16' });
     });
 
     it('only moves a race that is not the active season A-race', async () => {
