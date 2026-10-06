@@ -120,8 +120,9 @@ describe('Today page', () => {
     expect(html).toContain('Any time today');
     expect(html).toContain('55m');
     expect(html).toContain('Keep cadence high');
-    const steps = [...html.matchAll(/<li>(.*?)<\/li>/g)].map((m) =>
-      m[1].replaceAll(/<[^>]+>/g, '')
+    // Capture the label and the detail of each step directly: no tag stripping
+    const steps = [...html.matchAll(/<li>([^<]*) <span class="zone">([^<]*)<\/span><\/li>/g)].map(
+      (m) => m[1] + ' ' + m[2]
     );
     expect(steps).toEqual(['Warmup 15′ Z2', 'Main set 5 × 3′ Z5 / 3′ Z1 easy', 'Cooldown 10′ Z1']);
   });

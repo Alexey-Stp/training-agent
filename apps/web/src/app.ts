@@ -2,6 +2,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import type { Logger } from 'pino';
 import { authRouter, type AuthDeps } from './auth/routes';
 import { securityHeaders, sendHtml } from './http';
+import { createLimiters } from './rate-limit';
 import { settingsRouter, type SettingsDeps } from './settings/routes';
 import { todayRouter, type TodayRouteDeps } from './today/routes';
 import { weekRouter } from './week/routes';
@@ -27,6 +28,8 @@ export function createApp(deps: AppDeps): express.Express {
     res.type('css').send(STYLESHEET);
   });
 
+  // Everything below reads the database or Redis; /auth and /logout also have a stricter limit
+  app.use(createLimiters(deps.logger, deps.rateLimit).general);
   app.use(express.urlencoded({ extended: false, limit: '16kb' }));
   app.use(authRouter(deps));
   app.use(todayRouter(deps, deps));

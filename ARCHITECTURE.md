@@ -876,6 +876,7 @@ runPostRaceJob (apps/worker/src/races/post-race.ts)
 - Magic links are HMAC-SHA256 signed (`DASHBOARD_LINK_SECRET`, at least 32 characters), short-lived (`DASHBOARD_LINK_TTL_MINUTES`) and work once (Redis `SET NX` on the token id)
 - Sessions live server-side in Redis behind an `HttpOnly; SameSite=Lax; Secure` cookie, and POST forms carry a per-session CSRF token
 - Rejections log `{ tokenId, reason }` and never render athlete data
+- Rate limited per client (`express-rate-limit`, `apps/web/src/rate-limit.ts`): 20 requests per 15 minutes on `/auth` and `/logout`, 600 on everything else except `/healthz`; a 429 page and a `dashboard rate limited` warning follow. The counters live in this process, so several web instances would need a shared store such as `rate-limit-redis`
 
 ### Recommended Additions
 

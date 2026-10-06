@@ -4,6 +4,7 @@ import { verifyMagicLink, type MagicLinkResult } from '@triathlon/core';
 import { clearSessionCookie, readCookie, SESSION_COOKIE, sendHtml, sessionCookie } from '../http';
 import { renderSignedOut } from '../views/auth-pages';
 import { currentSession, rejectAuth, requireCsrf, requireSession, type UserRepo } from './guard';
+import { createLimiters, type RateLimitConfig } from '../rate-limit';
 import type { SessionStore } from './session-store';
 
 export interface AuthDeps {
@@ -16,6 +17,8 @@ export interface AuthDeps {
   /** Secure cookies everywhere but local development (plain http) */
   secureCookies: boolean;
   now: () => Date;
+  /** Sign-in and sign-out request limits; defaults in rate-limit.ts */
+  rateLimit?: Partial<RateLimitConfig>;
 }
 
 type Rejected =
@@ -45,6 +48,9 @@ async function acceptLink(
 export function authRouter(deps: AuthDeps): Router {
   const router = Router();
   const ttlSeconds = deps.sessionTtlHours * 3600;
+
+  // Sign-in checks a signature and talks to Redis and the database: limit it per client
+  router.use(['/auth', '/logout'], createLimiters(deps.logger, deps.rateLimit).auth);
 
   // GET /auth?t=<token>: the magic link from /dashboard. Success starts a session and
   // redirects, so the token leaves the address bar and history.
