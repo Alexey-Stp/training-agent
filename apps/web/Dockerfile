@@ -14,7 +14,8 @@ COPY packages/core/package*.json ./packages/core/
 COPY apps/web/package*.json ./apps/web/
 
 # Install dependencies
-RUN npm ci
+# Lifecycle scripts stay off: the Prisma client is generated explicitly below
+RUN npm ci --ignore-scripts
 
 # Build stage
 FROM base AS builder
@@ -31,7 +32,8 @@ COPY packages/core ./packages/core
 COPY apps/web ./apps/web
 
 # Generate Prisma client
-RUN npx prisma generate
+# The locally installed CLI (version pinned by package-lock.json), never an on-demand npx download
+RUN ./node_modules/.bin/prisma generate
 
 # Build packages
 WORKDIR /app/packages/core
