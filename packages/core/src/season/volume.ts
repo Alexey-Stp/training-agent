@@ -12,7 +12,30 @@ interface RampState {
   start: number;
   /** Hours of the most recent load week; null before the first one */
   lastLoad: number | null;
-  taperWeek: number;
+}
+
+/**
+ * Taper and race weeks are the explicit exception to the ramp cap and the recovery cadence:
+ * their volume drops on purpose, so ramp checks skip them.
+ */
+export function isRampException(kind: WeekKind): boolean {
+  return kind === 'taper' || kind === 'race';
+}
+
+/** Taper factor of a week with `remaining` taper weeks left (itself included) before the race. */
+export function taperFactor(remaining: number, config: BlockGeneratorConfig): number {
+  const factors = config.taperWeekFactorsFromRace;
+  return factors[Math.min(Math.max(remaining, 1), factors.length) - 1];
+}
+
+/** For each week, the taper weeks from it (included) to the end of its taper run; 0 off-taper. */
+function taperWeeksLeft(weekTypes: TrainingBlockType[]): number[] {
+  const left = weekTypes.map(() => 0);
+  for (let i = weekTypes.length - 1; i >= 0; i--) {
+    if (weekTypes[i] !== TrainingBlockType.taper) continue;
+    left[i] = 1 + (left.at(i + 1) ?? 0);
+  }
+  return left;
 }
 
 /**
@@ -65,6 +88,7 @@ function loadWeek(
 function nextWeek(
   index: number,
   type: TrainingBlockType,
+  taperLeft: number,
   s: RampState,
   available: number,
   config: BlockGeneratorConfig
@@ -74,10 +98,7 @@ function nextWeek(
     return { kind: 'race', hours: round1(reference * config.raceWeekFactor) };
   }
   if (type === TrainingBlockType.taper) {
-    const factors = config.taperWeekFactors;
-    const factor = factors[Math.min(s.taperWeek, factors.length - 1)];
-    s.taperWeek++;
-    return { kind: 'taper', hours: round1(reference * factor) };
+    return { kind: 'taper', hours: round1(reference * taperFactor(taperLeft, config)) };
   }
   if (s.lastLoad !== null && index % config.recoveryEvery === 0) {
     return { kind: 'recovery', hours: round1(s.lastLoad * config.recoveryFactor) };
@@ -89,7 +110,8 @@ function nextWeek(
  * Weekly hours for each plan week (block types in order, week 1 first). Load weeks grow at most
  * `maxWeeklyRamp` over the previous load week up to the phase ceiling; every `recoveryEvery`th
  * plan week in base/build/peak drops to `recoveryFactor` of the last load week; taper and race
- * weeks scale down from the last load week. `firstIndex` is the plan week of the first entry, so
+ * weeks scale down from the last load week (`taperWeekFactorsFromRace`, counted back from the
+ * race, then `raceWeekFactor`). `firstIndex` is the plan week of the first entry, so
  * a re-projection that starts mid-season keeps the season's recovery cadence.
  */
 export function buildWeeklyVolumes(
@@ -99,6 +121,9 @@ export function buildWeeklyVolumes(
   config: BlockGeneratorConfig,
   firstIndex = 1
 ): VolumeWeek[] {
-  const state: RampState = { start, lastLoad: null, taperWeek: 0 };
-  return weekTypes.map((type, i) => nextWeek(firstIndex + i, type, state, available, config));
+  const state: RampState = { start, lastLoad: null };
+  const taperLeft = taperWeeksLeft(weekTypes);
+  return weekTypes.map((type, i) =>
+    nextWeek(firstIndex + i, type, taperLeft[i], state, available, config)
+  );
 }

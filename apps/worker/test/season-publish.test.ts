@@ -1,10 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   Intensity,
+  RacePriority,
+  RaceType,
   SeasonPlanStatus,
   Sport,
   TrainingBlockType,
   type PlannedSessionDraft,
+  type Race,
   type RulesContext,
   type SeasonPlan,
   type TrainingBlock,
@@ -78,6 +81,7 @@ let active: SeasonPlan | null;
 let profile: UserProfile;
 let now: Date;
 let deps: SeasonPublishDeps;
+let races: Race[];
 
 function eventDates(): string[] {
   return [...icu.events.values()].map((e) => e.start_date_local.slice(0, 10));
@@ -87,11 +91,15 @@ beforeEach(() => {
   repo = new MemoryPlanRepo();
   icu = new FakeIcuCalendar();
   active = season();
+  races = [];
   profile = PROFILE;
   now = NOW;
   deps = {
     seasons: { findActiveSeason: () => Promise.resolve(active) },
     profiles: { findProfile: () => Promise.resolve(profile) },
+    races: {
+      listUpcoming: (_userId, fromDate) => Promise.resolve(races.filter((r) => r.date >= fromDate)),
+    },
     getRulesContext: () => Promise.resolve(EMPTY_CONTEXT),
     store: { repo, now: () => now },
     push: { repo, keys: [KEY], createClient: () => icu, now: () => now },
@@ -220,5 +228,42 @@ describe('publishSeasonWindow', () => {
     });
     expect(repo.rows.size).toBe(0);
     expect(icu.calls).toEqual([]);
+  });
+
+  describe('races', () => {
+    const race = (date: string, priority: RacePriority): Race => ({
+      date,
+      name: 'Club Race',
+      priority,
+      type: RaceType.half,
+    });
+    const titlesOn = (date: string) =>
+      [...icu.events.values()]
+        .filter((e) => e.start_date_local.startsWith(date))
+        .map((e) => e.name);
+
+    it('swaps a C-race into the calendar on its day', async () => {
+      races = [race('2026-10-17', RacePriority.C)];
+      await publishSeasonWindow(USER_ID, deps);
+      expect(titlesOn('2026-10-17')).toEqual(['🏁 Club Race']);
+    });
+
+    it('starts a B-race mini-taper inside the window for a race just after it', async () => {
+      // Half B-race on Fri 10-23: mini-taper 10-19..10-22, T-3 (Tue 10-20) is a rest day
+      await publishSeasonWindow(USER_ID, deps);
+      expect(titlesOn('2026-10-20').length).toBeGreaterThan(0);
+
+      repo = new MemoryPlanRepo();
+      icu = new FakeIcuCalendar();
+      races = [race('2026-10-23', RacePriority.B)];
+      deps = {
+        ...deps,
+        store: { repo, now: () => now },
+        push: { ...deps.push, repo, createClient: () => icu },
+      };
+      await publishSeasonWindow(USER_ID, deps);
+      expect(titlesOn('2026-10-20')).toEqual([]);
+      expect(titlesOn('2026-10-21').every((t) => !t.includes('🏁'))).toBe(true);
+    });
   });
 });

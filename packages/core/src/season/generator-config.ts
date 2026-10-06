@@ -36,9 +36,22 @@ export interface BlockGeneratorConfig {
   minStartFraction: number;
   /** Load-week ceiling per phase, as a fraction of available hours */
   phaseCeiling: { base: number; build: number; peak: number };
-  /** Taper week k volume as a fraction of the last load week; the last factor repeats */
-  taperWeekFactors: number[];
+  /**
+   * Taper week volume as a fraction of the last load week (peak), counted back from the race:
+   * [0] is the last taper week, [1] the one before, ...; the last factor repeats.
+   * Taper and race weeks are the explicit exception to `maxWeeklyRamp` (see `isRampException`).
+   */
+  taperWeekFactorsFromRace: number[];
+  /** Training volume of the race week (the race itself excluded) as a fraction of peak */
   raceWeekFactor: number;
+  /** Expected race duration per race type; the race session is excluded from week volume */
+  raceDurationMin: Record<RaceType, number>;
+  /** Days before a B-race that get the mini-taper (T-n..T-1) */
+  miniTaperDays: Record<RaceType, number>;
+  /** Session duration factor inside a B-race mini-taper */
+  miniTaperFactor: number;
+  /** Longest T-1 opener */
+  openerMaxMin: number;
 
   sportSplit: Record<RaceType, SportSplit>;
   /** Percentage points moved to the weak sport during base (0.10 = +10 pp) */
@@ -71,8 +84,26 @@ export const DEFAULT_BLOCK_GENERATOR_CONFIG: BlockGeneratorConfig = {
   recoveryFactor: 0.6,
   minStartFraction: 0.5,
   phaseCeiling: { base: 0.85, build: 0.95, peak: 1 },
-  taperWeekFactors: [0.75, 0.6, 0.5],
-  raceWeekFactor: 0.45,
+  taperWeekFactorsFromRace: [0.6, 0.75, 0.85],
+  raceWeekFactor: 0.4,
+  raceDurationMin: {
+    [RaceType.sprint]: 75,
+    [RaceType.olympic]: 150,
+    [RaceType.half]: 330,
+    [RaceType.full]: 780,
+    [RaceType.run]: 90,
+    [RaceType.other]: 120,
+  },
+  miniTaperDays: {
+    [RaceType.sprint]: 3,
+    [RaceType.olympic]: 3,
+    [RaceType.half]: 4,
+    [RaceType.full]: 5,
+    [RaceType.run]: 3,
+    [RaceType.other]: 3,
+  },
+  miniTaperFactor: 0.6,
+  openerMaxMin: 30,
 
   sportSplit: {
     [RaceType.sprint]: TRI_SPLIT,

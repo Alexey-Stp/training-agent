@@ -258,11 +258,12 @@ const planPushCommandDeps: PlanPushCommandDeps = {
 };
 
 // With an active season, /plan shows and stores the season's sessions
-const planSourceDeps: PlanSourceDeps = { seasons: seasonRepo, getRulesContext };
+const planSourceDeps: PlanSourceDeps = { seasons: seasonRepo, races: raceRepo, getRulesContext };
 
 const seasonPublishDeps: SeasonPublishDeps = {
   seasons: seasonRepo,
   profiles: profileRepo,
+  races: raceRepo,
   getRulesContext,
   store: planStoreDeps,
   push: planPushCommandDeps.push,
@@ -347,7 +348,12 @@ const planReconcileDeps: PlanReconcileDeps = {
   now: () => new Date(),
 };
 
-const weekShowDeps: WeekShowDeps = { repo: seasonRepo, getRulesContext, now: () => new Date() };
+const weekShowDeps: WeekShowDeps = {
+  repo: seasonRepo,
+  races: raceRepo,
+  getRulesContext,
+  now: () => new Date(),
+};
 
 // Coach chat: one LLM provider for the worker, every call logged to LlmCallLog
 const aiConfig = loadAiConfig();

@@ -8,6 +8,7 @@ import {
   GeneratedSeason,
   generateSeasonPlan,
   GenerateSeasonInput,
+  isRampException,
   RacePriority,
   RaceType,
   SeasonGenerationError,
@@ -77,6 +78,27 @@ function rampViolations(weeks: SeasonWeek[]): string[] {
   return out;
 }
 
+/**
+ * Taper and race weeks are the explicit ramp-cap exception: they stay below the last load week
+ * (peak) and decline through the taper run. The first taper week may be above a recovery week.
+ */
+function taperViolations(weeks: SeasonWeek[]): string[] {
+  const out: string[] = [];
+  let lastLoad: number | null = null;
+  weeks.forEach((w, i) => {
+    if (w.kind === 'load') lastLoad = w.hours;
+    if (!isRampException(w.kind)) return;
+    const before = i > 0 ? weeks[i - 1] : undefined;
+    const prev = before && isRampException(before.kind) ? before.hours : w.hours;
+    if (w.hours > prev + EPS || (lastLoad !== null && w.hours >= lastLoad)) {
+      out.push(
+        `${w.kind} week ${w.index.toString()}: ${w.hours.toString()} after ${prev.toString()}`
+      );
+    }
+  });
+  return out;
+}
+
 describe('generateSeasonPlan', () => {
   describe('24-week runway, 10 h/week', () => {
     const race = raceInWeeks(24);
@@ -106,6 +128,15 @@ describe('generateSeasonPlan', () => {
       const tail = season.weeks.slice(-3).map((w) => w.kind);
       expect(tail).toEqual(['taper', 'taper', 'race']);
       expect(Math.max(...season.weeks.map((w) => w.hours))).toBeLessThanOrEqual(10);
+    });
+
+    it('declines to ~60% the week before the race and ~40% in race week', () => {
+      const peak = season.weeks.findLast((w) => w.kind === 'load')?.hours ?? 0;
+      const [taper1, taper2, raceWeek] = season.weeks.slice(-3).map((w) => w.hours);
+      expect(taper1).toBeCloseTo(peak * 0.75, 1);
+      expect(taper2).toBeCloseTo(peak * 0.6, 1);
+      expect(raceWeek).toBeCloseTo(peak * 0.4, 1);
+      expect(taperViolations(season.weeks)).toEqual([]);
     });
 
     it('sets block targets from the weekly volumes', () => {
@@ -278,6 +309,7 @@ describe('generateSeasonPlan', () => {
           expectValid(season, raceDate, type);
           expect(totalWeeks(season)).toBe(weeks);
           expect(rampViolations(season.weeks)).toEqual([]);
+          expect(taperViolations(season.weeks)).toEqual([]);
           expect(season.weeks.every((w) => w.hours <= hours + EPS)).toBe(true);
           expect(season.blocks.some((b) => b.type === TrainingBlockType.build)).toBe(true);
           expect(season.blocks.at(-2)?.type).toBe(TrainingBlockType.taper);

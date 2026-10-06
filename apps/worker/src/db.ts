@@ -449,6 +449,7 @@ function toRaceRecord(row: Prisma.RaceGetPayload<object>): RaceRecord {
     name: row.name,
     priority: row.priority as RacePriority,
     type: row.type as RaceType,
+    travelDate: row.travelDate,
   };
 }
 
@@ -474,10 +475,10 @@ export const raceRepo: RaceRepo = {
     return rows.map(toRaceRecord);
   },
 
-  async moveDate(userId, raceId, date) {
+  async moveDate(userId, raceId, date, travelDate) {
     const { count } = await prisma.race.updateMany({
       where: { id: raceId, userId },
-      data: { date },
+      data: { date, travelDate },
     });
     return count > 0;
   },

@@ -2,9 +2,17 @@ import { addDays, format, parseISO } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
 import { PlannedSessionDraft } from '../planned-session';
 import { RulesContext, Session, Sport, UserProfile } from '../types';
-import { SeasonPlan, TrainingBlock } from './types';
+import { DEFAULT_BLOCK_GENERATOR_CONFIG } from './generator-config';
+import { weekVolumeFactor } from './season-weeks';
+import { Race, SeasonPlan, TrainingBlock, TrainingBlockType } from './types';
 import { blockEndDate } from './validate';
-import { blockWeekStart, expandWeek, weekIndexForDate } from './week-expander';
+import {
+  blockWeekStart,
+  blockWeekTargets,
+  expandWeek,
+  WeekTargets,
+  weekIndexForDate,
+} from './week-expander';
 
 /** Inclusive `yyyy-MM-dd` date range */
 export interface DateRange {
@@ -88,16 +96,37 @@ export interface SeasonDrafts {
   warnings: string[];
 }
 
+/** The block week's targets: the block average, shaped by the taper decline in taper blocks. */
+export function seasonWeekTargets(block: TrainingBlock, weekIndex: number): WeekTargets {
+  const config = DEFAULT_BLOCK_GENERATOR_CONFIG;
+  const average = blockWeekTargets(block, config);
+  const factor = weekVolumeFactor(block, weekIndex, config);
+  return {
+    hours: average.hours * factor,
+    swimH: average.swimH * factor,
+    bikeH: average.bikeH * factor,
+    runH: average.runH * factor,
+  };
+}
+
+/** Training hours of the race week: the target of the race block, if the season has one. */
+export function raceWeekHours(blocks: TrainingBlock[]): number | undefined {
+  return blocks.find((b) => b.type === TrainingBlockType.race)?.targetWeeklyHours;
+}
+
 /**
  * Season sessions for the days of `range`. Each block week touching the range is expanded
  * whole (so day placement and the rules engine see the full week) and then cut to the range.
- * `getContext` gets the week's first day, like `/week show`.
+ * `getContext` gets the week's first day, like `/week show`. `races` (A, B and C) shape the
+ * weeks around them; pass every race up to a few days past the range, because a B-race
+ * mini-taper starts before the race.
  */
 export async function seasonDraftsForRange(
   season: Pick<SeasonPlan, 'blocks'>,
   profile: UserProfile,
   range: DateRange,
-  getContext: (weekStart: string) => Promise<RulesContext>
+  getContext: (weekStart: string) => Promise<RulesContext>,
+  races: readonly Race[] = []
 ): Promise<SeasonDrafts> {
   const covered = clipToSeason(season, range);
   const result: SeasonDrafts = { covered, drafts: [], sessions: [], warnings: [] };
@@ -110,7 +139,12 @@ export async function seasonDraftsForRange(
     weeks.map(({ block, weekIndex }) => getContext(blockWeekStart(block, weekIndex)))
   );
   weeks.forEach(({ block, weekIndex }, w) => {
-    const week = expandWeek(block, weekIndex, profile, { context: contexts[w] });
+    const week = expandWeek(block, weekIndex, profile, {
+      context: contexts[w],
+      targets: seasonWeekTargets(block, weekIndex),
+      races,
+      aRaceWeekHours: raceWeekHours(season.blocks),
+    });
     // toPlannedSessions keeps session order and only drops rest days, so the lists line up
     const stored = week.plan.sessions.filter((s) => s.sport !== Sport.rest && s.durationMin > 0);
     week.sessions.forEach((draft, i) => {

@@ -118,7 +118,7 @@ See [CI_CD.md](CI_CD.md) for complete CI/CD documentation.
 - `/plan` - Generate 7-day training plan with rules applied (saved, shows each session's intervals.icu status). With an active season, days the season covers show the season's sessions
 - `/plan push` - Put the 7-day plan on your intervals.icu calendar as structured workouts (they sync to Garmin)
 - `/week show` - Show this week of your active season plan: the block's targets, the sessions that hit them, and any rules-engine adjustments
-- `/race add <yyyy-MM-dd> <type> <A|B|C> <name>` - Add a race (type: `sprint|olympic|half|full|run|other`), e.g. `/race add 2027-06-12 olympic A Prague Triathlon`
+- `/race add <yyyy-MM-dd> <type> <A|B|C> <name> [travel=<yyyy-MM-dd>]` - Add a race (type: `sprint|olympic|half|full|run|other`), e.g. `/race add 2027-06-12 olympic A Prague Triathlon travel=2027-06-11`. The optional travel day (1–7 days before the race) becomes a rest day when it falls in T-3..T-1; `/race move` keeps it the same number of days before the race.
 - `/race list` - Show your upcoming races
 - `/race move <yyyy-MM-dd> <yyyy-MM-dd>` - Change a race's date, e.g. `/race move 2027-06-12 2027-06-26`. Moving the A-race of your active season offers a re-projection of the season (see [Block review](#block-review))
 - `/season new` - Season wizard: pick weekly hours and your weak sport (inline buttons), review the block table, then save. Replacing an active season needs its own **Replace** button
@@ -146,15 +146,15 @@ The plan generator applies these rules automatically:
 
 #### Hard Rules (Enforce Safety)
 
-1. **NoHardHard**: No consecutive hard days (Z4/Z5 or tagged vo2/threshold). Second day downgraded to Z2. Two hard sessions on the same day are allowed, and an easy session after a hard one on the same day doesn't let a hard session through the next day.
-2. **ReadinessDownshift**: If today's check-in readiness (`Wellness.subjectiveReadiness`) is ≤ 2, downgrade today's hard sessions to Z2.
-3. **WeeklyLoadCap**: Limit weekly volume to 110% of previous week (10% progressive overload). Scales durations proportionally, min 30min per session.
+1. **NoHardHard**: No consecutive hard days (Z4/Z5 or tagged vo2/threshold). Second day downgraded to Z2. Two hard sessions on the same day are allowed, and an easy session after a hard one on the same day doesn't let a hard session through the next day. A race (tag `race`) can't move, so a hard session the day before or after a race is the one downgraded.
+2. **ReadinessDownshift**: If today's check-in readiness (`Wellness.subjectiveReadiness`) is ≤ 2, downgrade today's hard sessions to Z2. Races are never downgraded.
+3. **WeeklyLoadCap**: Limit weekly volume to 110% of previous week (10% progressive overload). Scales durations proportionally, min 30min per session (a shorter session is never lengthened). Race sessions are left out of the total and never scaled. Taper and race weeks (`WeekPlan.phase`) cut volume on purpose, so the cap treats the reduction as valid and doesn't apply.
 
 `applyRules` corrects a plan. `checkHardRules(plan, context)` only checks one and returns the hard rules it still breaks (`RuleViolation[]`, empty when it passes). For example, the 30-minute floor can keep a week over the load cap.
 
 #### Soft Rules (Optimize Structure)
 
-4. **SwimRotation**: Enforce Wed = technique, Fri = intervals.
+4. **SwimRotation**: Enforce Wed = technique, Fri = intervals. Taper sessions (tag `taper`) are left alone, so a pre-race Friday swim stays easy.
 
 ### Season Planning
 
@@ -169,7 +169,7 @@ Every issue names the blocks involved, e.g. `block 2 (build) ends 2026-04-26 but
 
 - **Blocks**: race week (1w) ← taper (half 2w, full 3w, others 1w) ← peak (3w) ← two build blocks (4w each) ← base for the remaining weeks (split base1/base2 from 6 weeks). A half-distance race 24 weeks out gives `base 5 · base 5 · build 4 · build 4 · peak 3 · taper 2 · race 1`.
 - **Short runways**: the generator shortens peak, then the build blocks, then drops the second build, until base has at least 3 weeks. Taper and one build block are always kept. Each step, and any base under 8 weeks, is reported in `warnings`, e.g. 10 weeks gives `base 3 · build 3 · peak 1 · taper 2 · race 1`.
-- **Volume**: week 1 starts from the athlete's current weekly load, clamped to 50–100% of available hours. Load weeks grow at most 8% over the previous load week, capped at 85% (base), 95% (build) or 100% (peak) of available hours. Every 4th plan week in base/build/peak is a recovery week at 60% of the last load week. Taper weeks drop to 75/60/50% and race week to 45%.
+- **Volume**: week 1 starts from the athlete's current weekly load, clamped to 50–100% of available hours. Load weeks grow at most 8% over the previous load week, capped at 85% (base), 95% (build) or 100% (peak) of available hours. Every 4th plan week in base/build/peak is a recovery week at 60% of the last load week. Taper weeks are sized from the last load week (peak), counted back from the race: the last taper week is 60%, the one before 75%, the one before that 85%. Race week training volume (the race itself excluded) is 40%. A half-distance taper is therefore 75% → 60% → race week 40%. Taper and race weeks are the explicit exception to the 8% ramp cap (`isRampException`).
 - **Sport split** by race type (half: swim 15% / bike 55% / run 30%). In base weeks the weak sport gets +10 percentage points, taken from the other sports in proportion to their shares.
 
 It returns the `TrainingBlock[]` (weekly targets are the mean of the block's weeks), a per-week `weeks[]` breakdown, the aligned plan `startDate` (a Monday) and `warnings[]`. The output passes `validateSeasonPlan`.
@@ -182,7 +182,8 @@ It returns the `TrainingBlock[]` (weekly targets are the mean of the block's wee
 - **Templates by block type**:
   - **base**: endurance and technique, no Z4/Z5. Wed technique swim, Fri aerobic intervals swim, easy bike, tempo bike, long bike, easy run with strides, easy run, long run.
   - **build/peak**: the same frame with key sessions: bike VO2 Z5, run threshold Z4, swim threshold Z4.
-  - **taper/race**: short openers. At most 2 intensity touches (bike and run openers), every session ≤ 75 min. Volume over the cap is reported in `warnings`.
+  - **taper**: short sessions, every one ≤ 75 min. The weekly intensity frequency is kept with 2 sharpening sessions (bike and run, Z4, reps halved). Volume over the cap is reported in `warnings`. A taper block's weeks decline (`weekVolumeFactor`): the block stores its average, and the publisher reshapes each week with the taper factors.
+  - **race** (with the A-race passed in `races`): the race-week template of the race type, see [Races in the plan](#races-in-the-plan). Without races it falls back to the taper template.
   - **recovery/transition**: the base frame with every session easy.
 - **Placement from the Profile**:
   - swims go on `swimDays` (the `_optional` day gets the optional swim);
@@ -194,7 +195,17 @@ It returns the `TrainingBlock[]` (weekly targets are the mean of the block's wee
 
 `draftBlockWeek` returns the draft before the rules run. `blockWeekTargets`, `blockWeekStart`, `weekIndexForDate` and `weekVolume` are the helpers around it. `/week show` expands the week of the active season that contains today and shows it. It doesn't store anything.
 
-`seasonDraftsForRange(season, profile, { from, to }, getContext)` (core `season/window.ts`) expands every block week touching a date range and cuts it to the range, clipped to the season. Both `/plan` and the rolling publisher use it, so they store the same sessions for the same days.
+`seasonDraftsForRange(season, profile, { from, to }, getContext, races)` (core `season/window.ts`) expands every block week touching a date range and cuts it to the range, clipped to the season. Both `/plan` and the rolling publisher use it, so they store the same sessions for the same days. The worker loads the races a week past both ends of the range (`racesForRange`), since a race reaches up to 6 days before it.
+
+#### Races in the plan
+
+`expandWeek` applies the athlete's races to the draft before the rules engine runs (core `season/race-week.ts`, `applyRaceOverrides`). The race itself is one session `🏁 <name>` (Sport `other`, `run` for run races; duration estimate per race type: sprint 75, olympic 150, half 330, full 780, run 90, other 120 min). It is tagged `race`, it is not counted as week volume, and the rules never scale or downgrade it.
+
+- **A-race** (the season's): T-6..T-1 follow the race-week template of the race type, sized to the race week's training hours (40% of peak). Sprint/olympic/other: easy swim and run, bike sharpening at T-5, a 20′ easy spin at T-3, easy swim and run at T-2, a 30′ bike opener at T-1. Half/full: one moderate ride, run sharpening at T-5, full rest at T-3, easy swim and run at T-2, the T-1 opener. Run: run-only, with a 20′ jog at T-3. The opener is Z3 with 3 × 1′ race-pace touches, so no hard session sits after T-3. After the race, an optional 30′ Z1 session every other day to the end of the race's ISO week. A travel day in T-3..T-1 is a rest day; travelling at T-1 moves the opener to T-2. The window is date-based, so a taper week that holds T-6..T-1 of a Monday race gets them too. Race week keeps the taper's intensity count: sharpening + opener = 2.
+- **B-race**: a mini-taper inside the current block over the 3 (sprint/olympic/run/other), 4 (half) or 5 (full) days before the race. Sessions are cut to 60%; hard sessions stay as shortened sharpening until T-4 and go easy after that. T-3 becomes the shakeout or rest of the race type, T-1 the opener, and the day after the race is easy and ≤ 45 min. A B-race inside the A taper is swapped in like a C-race.
+- **C-race**: train through. The race replaces the day's sessions, and when none of them was a key session (hard or long), the key session nearest the race is dropped instead. The other days keep their normal volume.
+
+Another A-race than the season's (e.g. one for next season) is treated as a B-race.
 
 #### Season wizard
 
@@ -625,8 +636,8 @@ Available commands:
 /plan - Generate a 7-day training plan
 /plan push - Put the plan on your intervals.icu calendar (syncs to your watch)
 /week show - Show this week of your season plan
-/race add <yyyy-MM-dd> <type> <A|B|C> <name> - Add a race
-  Example: /race add 2027-06-12 olympic A Prague Triathlon
+/race add <yyyy-MM-dd> <type> <A|B|C> <name> [travel=<yyyy-MM-dd>] - Add a race
+  Example: /race add 2027-06-12 olympic A Prague Triathlon travel=2027-06-11
 /race list - Show your upcoming races
 /race move <yyyy-MM-dd> <yyyy-MM-dd> - Change a race's date
 /season new - Build a season plan towards your next A race

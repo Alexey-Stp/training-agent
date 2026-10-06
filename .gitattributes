@@ -2,3 +2,4 @@
 packages/ai/src/prompts/*.md text eol=lf
 packages/ai/test/**/__snapshots__/* text eol=lf
 apps/worker/test/__snapshots__/* text eol=lf
+packages/core/test/**/__snapshots__/* text eol=lf

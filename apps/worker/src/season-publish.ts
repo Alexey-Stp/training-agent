@@ -9,6 +9,7 @@ import {
 import { runIcuSyncJob } from './activity-sync';
 import { pushPlannedSessions, type PlanPushDeps } from './plan-push';
 import { materializeRange, type PlanStoreDeps } from './plan-store';
+import { racesForRange, type UpcomingRaces } from './season-races';
 import type { SeasonRepo } from './week-command';
 
 export interface ProfileRepo {
@@ -18,6 +19,8 @@ export interface ProfileRepo {
 export interface SeasonPublishDeps {
   seasons: SeasonRepo;
   profiles: ProfileRepo;
+  /** A, B and C races shape the weeks around them */
+  races: UpcomingRaces;
   /** Rules-engine input for a week starting on `date` (handlers.ts `getRulesContext`) */
   getRulesContext(userId: string, date: string): Promise<RulesContext>;
   store: PlanStoreDeps;
@@ -59,8 +62,13 @@ export async function publishSeasonWindow(
   if (!season) return { status: 'skipped', reason: 'no_season' };
 
   const window = rollingWindow(localToday(deps.now(), profile.timezone), deps.windowDays);
-  const { covered, drafts } = await seasonDraftsForRange(season, profile, window, (weekStart) =>
-    deps.getRulesContext(userId, weekStart)
+  const races = await racesForRange(deps.races, userId, season, window);
+  const { covered, drafts } = await seasonDraftsForRange(
+    season,
+    profile,
+    window,
+    (weekStart) => deps.getRulesContext(userId, weekStart),
+    races
   );
   if (!covered) return { status: 'skipped', reason: 'outside_season' };
 

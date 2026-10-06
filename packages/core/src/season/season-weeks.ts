@@ -3,7 +3,7 @@ import { Sport } from '../types';
 import { BlockGeneratorConfig, round1, SportSplit } from './generator-config';
 import { sportShares } from './sport-split';
 import { RaceType, TrainingBlock, TrainingBlockType } from './types';
-import { VolumeWeek, WeekKind } from './volume';
+import { taperFactor, VolumeWeek, WeekKind } from './volume';
 
 export interface SeasonWeek {
   /** 1-based plan week */
@@ -83,4 +83,22 @@ export function withTargets(
     targetBikeH: round1(mean(own, (w) => w.bikeH)),
     targetRunKm: round1(mean(own, (w) => w.runH) * config.runKmPerHour),
   };
+}
+
+/**
+ * Week `weekIndex`'s volume relative to the block average. Blocks store only their average, so
+ * a taper block's declining weeks are recovered from the taper factors: week i of n gets
+ * `taperFactor(n - i) / mean(taper factors)`. Every other block is flat (1).
+ */
+export function weekVolumeFactor(
+  block: Pick<TrainingBlock, 'type' | 'weeks'>,
+  weekIndex: number,
+  config: BlockGeneratorConfig
+): number {
+  if (block.type !== TrainingBlockType.taper || block.weeks < 2) return 1;
+  const factors = Array.from({ length: block.weeks }, (_, i) =>
+    taperFactor(block.weeks - i, config)
+  );
+  const average = factors.reduce((sum, f) => sum + f, 0) / factors.length;
+  return factors[weekIndex] / average;
 }

@@ -37,6 +37,8 @@ export interface Race {
   name: string;
   priority: RacePriority;
   type: RaceType;
+  /** Travel day before the race (yyyy-MM-dd); within T-3..T-1 it becomes a rest day */
+  travelDate?: string | null;
 }
 
 export interface TrainingBlock {

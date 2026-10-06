@@ -30,6 +30,11 @@ export interface WeekPlan {
   sessions: Session[];
   warnings: string[];
   appliedRules: string[];
+  /**
+   * Set on A-race taper and race weeks. Their volume drops on purpose, so WeeklyLoadCap
+   * treats the reduction as valid and doesn't cap the week.
+   */
+  phase?: 'taper' | 'race';
 }
 
 export interface UserProfile {
@@ -92,6 +97,25 @@ export function isHardSession(session: Session): boolean {
   if (HARD_INTENSITIES.has(session.intensity)) return true;
   if (session.tags?.some((tag) => HARD_TAGS.has(tag))) return true;
   return false;
+}
+
+/** Tag of the race itself; a race session is never downgraded, scaled or counted as volume. */
+export const RACE_TAG = 'race';
+/** Tag of sessions inside a taper (A taper/race weeks, B-race mini-taper days) */
+export const TAPER_TAG = 'taper';
+/** Tag of a short pre-race opener (race-pace touches, not a hard session) */
+export const OPENERS_TAG = 'openers';
+/** Tag of a taper key session: race-pace intervals, shortened */
+export const SHARPENING_TAG = 'sharpening';
+
+export function isRaceSession(session: Pick<Session, 'tags'>): boolean {
+  return session.tags?.includes(RACE_TAG) ?? false;
+}
+
+/** A session with intensity work: hard, or an opener. The race itself doesn't count. */
+export function isIntensitySession(session: Session): boolean {
+  if (isRaceSession(session)) return false;
+  return isHardSession(session) || (session.tags?.includes(OPENERS_TAG) ?? false);
 }
 
 export function downgradeToEasy(session: Session, reason: string): Session {

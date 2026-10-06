@@ -147,4 +147,44 @@ describe('buildWorkoutSteps', () => {
       buildWorkoutSteps({ sport: Sport.run, intensity: Intensity.z3, durationMin: 25 })
     ).toEqual([{ kind: 'steady', durationMin: 25, zone: Intensity.z3 }]);
   });
+
+  it('gives an opener 3 × 1′ race-pace touches inside warmup and cooldown', () => {
+    const blocks = buildWorkoutSteps({
+      sport: Sport.bike,
+      intensity: Intensity.z3,
+      durationMin: 30,
+      tags: ['openers'],
+    });
+    expect(blocks).toEqual([
+      { kind: 'warmup', durationMin: 11, zone: Intensity.z2 },
+      {
+        kind: 'repeat',
+        count: 3,
+        work: { durationMin: 1, zone: Intensity.z4 },
+        rest: { durationMin: 2, zone: Intensity.z1 },
+      },
+      { kind: 'cooldown', durationMin: 10, zone: Intensity.z1 },
+    ]);
+  });
+
+  it('halves the reps of a sharpening session and keeps the race one steady block', () => {
+    const sharpening = buildWorkoutSteps({
+      sport: Sport.run,
+      intensity: Intensity.z4,
+      durationMin: 40,
+      tags: ['sharpening'],
+    });
+    const reps = sharpening.find((b) => b.kind === 'repeat');
+    expect(reps).toMatchObject({ count: 5, work: { durationMin: 2 } });
+    expect(workoutMinutes(sharpening)).toBe(40);
+
+    expect(
+      buildWorkoutSteps({
+        sport: Sport.other,
+        intensity: Intensity.z4,
+        durationMin: 330,
+        tags: ['race'],
+      })
+    ).toEqual([{ kind: 'steady', durationMin: 330, zone: Intensity.z4 }]);
+  });
 });

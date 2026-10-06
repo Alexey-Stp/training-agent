@@ -5,9 +5,11 @@ import {
   RulesContext,
   Session,
   isHardSession,
+  isRaceSession,
   downgradeToEasy,
   Intensity,
   Sport,
+  TAPER_TAG,
 } from './types';
 
 export type HardRule = 'NoHardHard' | 'ReadinessDownshift' | 'WeeklyLoadCap';
@@ -32,7 +34,8 @@ export function applyRules(weekPlan: WeekPlan, context: RulesContext): WeekPlan 
   return plan;
 }
 
-// Soft Rule 4: SwimRotation - ensure Wed is technique, Fri is intervals
+// Soft Rule 4: SwimRotation - ensure Wed is technique, Fri is intervals.
+// Taper sessions are left alone, so a pre-race Friday swim stays easy.
 function applySwimRotationRule(plan: WeekPlan): WeekPlan {
   const sessions = [...plan.sessions];
   const appliedRules = [...plan.appliedRules];
@@ -41,7 +44,7 @@ function applySwimRotationRule(plan: WeekPlan): WeekPlan {
   sessions.forEach((session, idx) => {
     const dayName = dayNameOf(session.date);
 
-    if (session.sport === Sport.swim) {
+    if (session.sport === Sport.swim && !session.tags?.includes(TAPER_TAG)) {
       if (dayName === 'Wed' && !session.tags?.includes('technique')) {
         sessions[idx] = {
           ...session,
@@ -87,7 +90,7 @@ function applyReadinessDownshiftRule(plan: WeekPlan, context: RulesContext): Wee
   let modified = false;
 
   sessions.forEach((session, idx) => {
-    if (session.date === todayStr && isHardSession(session)) {
+    if (session.date === todayStr && isHardSession(session) && !isRaceSession(session)) {
       sessions[idx] = downgradeToEasy(session, `Low readiness (${readiness}/5)`);
       modified = true;
     }
@@ -101,11 +104,15 @@ function applyReadinessDownshiftRule(plan: WeekPlan, context: RulesContext): Wee
   return { ...plan, sessions, warnings, appliedRules };
 }
 
-// Hard Rule 1: NoHardHard - no two consecutive hard days
+// Hard Rule 1: NoHardHard - no two consecutive hard days.
+// A race can't move, so a hard session next to a race day is the one downgraded.
 function applyNoHardHardRule(plan: WeekPlan): WeekPlan {
   const sessions = [...plan.sessions].sort((a, b) => a.date.localeCompare(b.date));
   const warnings = [...plan.warnings];
   const appliedRules = [...plan.appliedRules];
+  const raceDates = sessions.filter(isRaceSession).map((s) => s.date);
+  const nextToRace = (date: string) =>
+    raceDates.some((race) => isNextDay(race, date) || isNextDay(date, race));
 
   let modified = false;
   // Last date that kept a hard session. Easy sessions don't reset it, so an easy session
@@ -113,9 +120,12 @@ function applyNoHardHardRule(plan: WeekPlan): WeekPlan {
   let lastHardDate: string | null = null;
 
   sessions.forEach((session, idx) => {
-    if (!isHardSession(session)) return;
+    if (!isHardSession(session) || isRaceSession(session)) return;
 
-    if (lastHardDate !== null && isNextDay(lastHardDate, session.date)) {
+    if (nextToRace(session.date)) {
+      sessions[idx] = downgradeToEasy(session, 'No hard session next to a race');
+      modified = true;
+    } else if (lastHardDate !== null && isNextDay(lastHardDate, session.date)) {
       sessions[idx] = downgradeToEasy(session, 'No back-to-back hard sessions allowed');
       modified = true;
     } else {
@@ -131,7 +141,13 @@ function applyNoHardHardRule(plan: WeekPlan): WeekPlan {
   return { ...plan, sessions, warnings, appliedRules };
 }
 
-// Hard Rule 3: WeeklyLoadCap - limit weekly load to 110% of last week
+/** Planned training minutes; the race itself is not training load the cap can shape. */
+function trainingMinutes(sessions: Session[]): number {
+  return sessions.filter((s) => !isRaceSession(s)).reduce((sum, s) => sum + s.durationMin, 0);
+}
+
+// Hard Rule 3: WeeklyLoadCap - limit weekly load to 110% of last week.
+// Taper and race weeks (`plan.phase`) cut volume on purpose: the reduction is valid, no cap.
 function applyWeeklyLoadCapRule(plan: WeekPlan, context: RulesContext): WeekPlan {
   const lastWeekMinutes = context.last7dStats.totalMinutes;
 
@@ -139,24 +155,31 @@ function applyWeeklyLoadCapRule(plan: WeekPlan, context: RulesContext): WeekPlan
   if (lastWeekMinutes === 0) {
     return plan;
   }
+  if (plan.phase) {
+    return {
+      ...plan,
+      appliedRules: [...plan.appliedRules, `WeeklyLoadCap: ${plan.phase} week, reduction expected`],
+    };
+  }
 
   const sessions = [...plan.sessions];
   const warnings = [...plan.warnings];
   const appliedRules = [...plan.appliedRules];
 
-  const plannedMinutes = sessions.reduce((sum, s) => sum + s.durationMin, 0);
+  const plannedMinutes = trainingMinutes(sessions);
   const maxAllowedMinutes = Math.round(lastWeekMinutes * 1.1);
 
   if (plannedMinutes <= maxAllowedMinutes) {
     return plan;
   }
 
-  // Scale down sessions proportionally, keeping min 30m
+  // Scale down sessions proportionally, keeping min 30m (a shorter session is never lengthened)
   const scaleFactor = maxAllowedMinutes / plannedMinutes;
 
   sessions.forEach((session, idx) => {
-    if (session.sport !== Sport.rest && session.durationMin > 0) {
-      const newDuration = Math.max(30, Math.round(session.durationMin * scaleFactor));
+    if (session.sport !== Sport.rest && session.durationMin > 0 && !isRaceSession(session)) {
+      const floor = Math.min(session.durationMin, 30);
+      const newDuration = Math.max(floor, Math.round(session.durationMin * scaleFactor));
       if (newDuration !== session.durationMin) {
         sessions[idx] = {
           ...session,
@@ -215,7 +238,9 @@ function hardHardViolations(sessions: Session[]): RuleViolation[] {
 function readinessViolations(plan: WeekPlan, context: RulesContext): RuleViolation[] {
   const readiness = context.todayWellness?.subjectiveReadiness;
   if (readiness == null || readiness > 2) return [];
-  const hardToday = plan.sessions.some((s) => s.date === plan.startDate && isHardSession(s));
+  const hardToday = plan.sessions.some(
+    (s) => s.date === plan.startDate && isHardSession(s) && !isRaceSession(s)
+  );
   if (!hardToday) return [];
   return [
     {
@@ -228,8 +253,8 @@ function readinessViolations(plan: WeekPlan, context: RulesContext): RuleViolati
 
 function loadCapViolations(plan: WeekPlan, context: RulesContext): RuleViolation[] {
   const lastWeekMinutes = context.last7dStats.totalMinutes;
-  if (lastWeekMinutes === 0) return [];
-  const plannedMinutes = plan.sessions.reduce((sum, s) => sum + s.durationMin, 0);
+  if (lastWeekMinutes === 0 || plan.phase) return [];
+  const plannedMinutes = trainingMinutes(plan.sessions);
   const maxAllowedMinutes = Math.round(lastWeekMinutes * 1.1);
   if (plannedMinutes <= maxAllowedMinutes) return [];
   return [
