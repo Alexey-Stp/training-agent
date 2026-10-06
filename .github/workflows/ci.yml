@@ -109,6 +109,7 @@ jobs:
           test -d packages/core/dist || exit 1
           test -d apps/bot/dist || exit 1
           test -d apps/worker/dist || exit 1
+          test -d apps/web/dist || exit 1
 
   docker-build:
     name: Docker Build Test
@@ -141,6 +142,16 @@ jobs:
           file: ./apps/worker/Dockerfile
           push: false
           tags: triathlon-worker:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./apps/web/Dockerfile
+          push: false
+          tags: triathlon-web:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

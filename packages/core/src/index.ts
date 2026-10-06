@@ -3,6 +3,7 @@ export * from './config';
 export * from './plan-generator';
 export * from './rules-engine';
 export * from './crypto';
+export * from './magic-link';
 export * from './logger';
 export * from './workout';
 export * from './planned-session';

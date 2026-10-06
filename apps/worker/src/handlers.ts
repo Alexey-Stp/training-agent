@@ -50,6 +50,7 @@ Available commands:
 /connect status - Show your intervals.icu link
 /disconnect icu - Remove your intervals.icu link
 /sync - Pull your latest intervals.icu activities and wellness now
+/dashboard - Get a sign-in link to your web dashboard (today, week, settings)
 ${profileInfo}`;
 }
 
@@ -236,6 +237,7 @@ Available commands:
 /race add | /race list - Manage races
 /season new | /season show - Season plan
 /log <sport> <minutes> [intensity] - Log workout
+/dashboard - Web dashboard link
 
 Type /start for more details.`;
 }

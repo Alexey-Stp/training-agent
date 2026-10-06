@@ -70,6 +70,7 @@ import {
   getRulesContext,
 } from './handlers';
 import { handleWeekShow, MSG_WEEK_USAGE, type WeekShowDeps } from './week-command';
+import { handleDashboard, type DashboardCommandDeps } from './dashboard-command';
 import {
   handleConnectIcu,
   handleConnectStatus,
@@ -397,6 +398,13 @@ const weekShowDeps: WeekShowDeps = {
   now: () => new Date(),
 };
 
+const dashboardDeps: DashboardCommandDeps = {
+  baseUrl: config.DASHBOARD_BASE_URL,
+  secret: config.DASHBOARD_LINK_SECRET,
+  ttlMinutes: config.DASHBOARD_LINK_TTL_MINUTES,
+  now: () => new Date(),
+};
+
 // Coach chat: one LLM provider for the worker, every call logged to LlmCallLog
 const aiConfig = loadAiConfig();
 const llmProvider = withCallLog(createLlmProvider(aiConfig), llmCallLogRepo, { logger });
@@ -630,6 +638,10 @@ const worker = new Worker<CommandJob>(
             args[0]?.toLowerCase() === 'status'
               ? await handleConnectStatus(user.id, icuConnectDeps)
               : '❌ Usage: /connect icu | /connect status';
+          break;
+
+        case 'dashboard':
+          response = handleDashboard(user.id, dashboardDeps);
           break;
 
         case 'disconnect':

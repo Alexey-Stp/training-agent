@@ -80,12 +80,20 @@ See [CI_CD.md](CI_CD.md) for complete CI/CD documentation.
 │   │   │   └── logger.ts     # Pino logger
 │   │   ├── Dockerfile
 │   │   └── package.json
-│   └── worker/           # Background job processor
+│   ├── worker/           # Background job processor
+│   │   ├── src/
+│   │   │   ├── index.ts      # Worker entry point
+│   │   │   ├── handlers.ts   # Command handlers
+│   │   │   ├── db.ts         # Database utilities
+│   │   │   └── logger.ts     # Pino logger
+│   │   ├── Dockerfile
+│   │   └── package.json
+│   └── web/              # Athlete web dashboard (Express, server-rendered)
 │       ├── src/
-│       │   ├── index.ts      # Worker entry point
-│       │   ├── handlers.ts   # Command handlers
-│       │   ├── db.ts         # Database utilities
-│       │   └── logger.ts     # Pino logger
+│       │   ├── index.ts      # HTTP server entry point
+│       │   ├── app.ts        # createApp(deps): routes and middleware
+│       │   ├── auth/         # Magic-link sign-in, sessions, guard
+│       │   └── views/        # HTML templates and the stylesheet
 │       ├── Dockerfile
 │       └── package.json
 ├── packages/
@@ -440,6 +448,15 @@ The worker exposes job metrics and can alert an admin when a morning brief keeps
 - **Job registry.** `apps/worker/src/jobs/registry.ts` lists every job the worker may schedule. At boot, any repeatable scheduler in those queues whose job is not in the registry is deleted from Redis. When you add a job, add it to the registry too.
 - **Failure alert.** After `BRIEF_FAILURE_ALERT_THRESHOLD` (3) final daily-brief failures in a row for one athlete (retries do not count), the chat `ADMIN_TELEGRAM_ID` gets one message. It is sent once per incident; a successful brief ends the incident. Leave `ADMIN_TELEGRAM_ID` empty to turn the alert off.
 - **Bull Board.** `BULL_BOARD_ENABLED=true` serves a queue inspector at `http://127.0.0.1:9101/admin/queues` (`BULL_BOARD_PORT`). It can retry and delete jobs, so it binds to loopback only and docker-compose does not publish it. Use it for local development.
+
+## Web dashboard
+
+`apps/web` is a mobile-first web page for athletes. It is rendered on the server and has no client JavaScript.
+
+- **Sign-in.** Send `/dashboard` to the bot. The reply has an "Open dashboard" button with a one-time link to `DASHBOARD_BASE_URL/auth?t=…`. The link is signed with `DASHBOARD_LINK_SECRET` and expires after `DASHBOARD_LINK_TTL_MINUTES` (15). Opening it starts a session that lasts `DASHBOARD_SESSION_TTL_HOURS` (168) and is kept in Redis behind an HttpOnly cookie. There are no passwords.
+- **Expired or tampered links.** A missing, tampered, expired or already used link, or a missing session, gets a 401 "Link expired" page and a `dashboard auth rejected` warning with the token id and the reason. No athlete data is rendered.
+- **Off by default.** Leave `DASHBOARD_BASE_URL` empty and `/dashboard` answers that the dashboard is not set up.
+- **Running it.** `npm run dev:web` serves it on `WEB_PORT` (3000), and docker-compose runs it as the `web` service. `GET /healthz` returns 200.
 
 ## intervals.icu Integration
 

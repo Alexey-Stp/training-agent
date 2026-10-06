@@ -126,6 +126,31 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 
 **Concurrency**: Currently 5 concurrent jobs. Can be increased for higher throughput.
 
+### Web Service (`apps/web`)
+
+**Responsibility**: The athlete-facing web dashboard. It is read-mostly: it reads plan and training data and writes only settings.
+
+**Key Files**:
+
+- `index.ts` - Express 5 server on `WEB_PORT`, with Prisma and Redis wiring
+- `app.ts` - `createApp(deps)`: security headers, `/healthz`, `/app.css`, the auth routes and the guarded pages. Dependencies are injected so tests run with in-memory fakes on an ephemeral port
+- `auth/routes.ts` - `GET /auth?t=` (magic link) and `POST /logout`
+- `auth/guard.ts` - `requireSession` (session cookie → Redis session → user exists, else a 401 page plus a `dashboard auth rejected` warning) and `requireCsrf`
+- `auth/session-store.ts` - `RedisSessionStore`: `web:session:<id>` holds `{userId, csrf}` with a TTL, and `web:link:<jti>` (`SET NX`) is the one-time-use guard
+- `views/` - HTML templates (plain functions, `esc()` for every dynamic value) and the single hashed stylesheet
+
+**Sign-in flow**:
+
+1. `/dashboard` is handled by the worker (`dashboard-command.ts`). It signs a token for `User.id` with core `signMagicLink` (`magic-link.ts`: `base64url(payload).base64url(HMAC-SHA256)`, payload `{v, jti, uid, exp}`) and replies with a URL button, so the token never appears in the chat text.
+2. `GET /auth?t=` runs `verifyMagicLink`: shape, a constant-time signature check, then expiry. It then consumes `jti` once and checks that the user exists. On success it creates the session, sets the cookie and redirects with 303 to `/`, so the token leaves the address bar.
+3. Every page route goes through `requireSession` and takes the user id from the session only. Routes never accept a user identifier.
+
+**Design Principles**:
+
+- Server-rendered, mobile-first (about 390px), no client JavaScript; the CSP is `default-src 'none'; style-src 'self'`
+- `Referrer-Policy: no-referrer` and `Cache-Control: no-store` on pages
+- Every query is scoped by the session's `userId`
+
 ### Core Package (`packages/core`)
 
 **Responsibility**: Shared business logic, types, rules engine.
@@ -836,6 +861,13 @@ runPostRaceJob (apps/worker/src/races/post-race.ts)
 - All loggers come from `createLogger()` in core, with pino `redact` on `LOG_REDACT_PATHS` (`apiKey`, `icuCredentials`, `rawText`, `args`, `message.text`, `authorization` headers, …)
 - The bot logs update metadata only (ids, text length), never message text
 - Covered by `packages/core/test/logger.test.ts`
+- Dashboard tokens and cookies (`token`, `cookie`, `query.t`) are redacted too
+
+✅ **Dashboard Sign-in**
+
+- Magic links are HMAC-SHA256 signed (`DASHBOARD_LINK_SECRET`, at least 32 characters), short-lived (`DASHBOARD_LINK_TTL_MINUTES`) and work once (Redis `SET NX` on the token id)
+- Sessions live server-side in Redis behind an `HttpOnly; SameSite=Lax; Secure` cookie, and POST forms carry a per-session CSRF token
+- Rejections log `{ tokenId, reason }` and never render athlete data
 
 ### Recommended Additions
 

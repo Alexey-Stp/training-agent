@@ -20,7 +20,7 @@ jobs:
 
     strategy:
       matrix:
-        service: [bot, worker]
+        service: [bot, worker, web]
 
     steps:
       - name: Checkout code

@@ -8,7 +8,7 @@ const encKeySchema = z
 /** `HH:mm`, 24h: Profile.briefTime/closeoutTime and their *_DEFAULT_TIME */
 export const BRIEF_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-const envSchema = z.object({
+const baseEnvSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   DATABASE_URL: z.string().url(),
   REDIS_HOST: z.string().default('localhost'),
@@ -113,6 +113,35 @@ const envSchema = z.object({
     z.coerce.number().int().positive().optional()
   ),
   BRIEF_FAILURE_ALERT_THRESHOLD: z.coerce.number().int().min(1).max(20).default(3),
+  // Web dashboard (TA-52): /dashboard sends a signed one-time link to DASHBOARD_BASE_URL; the web
+  // app (apps/web, WEB_PORT) verifies it with DASHBOARD_LINK_SECRET and starts a server session.
+  // An unset base URL turns /dashboard off. TELEGRAM_BOT_USERNAME builds t.me deep links.
+  DASHBOARD_BASE_URL: z.preprocess((v) => (v === '' ? undefined : v), z.url().optional()),
+  DASHBOARD_LINK_SECRET: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().min(32, 'must be at least 32 characters (openssl rand -base64 32)').optional()
+  ),
+  DASHBOARD_LINK_TTL_MINUTES: z.coerce.number().int().min(1).max(60).default(15),
+  DASHBOARD_SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(720).default(168),
+  WEB_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+  TELEGRAM_BOT_USERNAME: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z
+      .string()
+      .regex(/^\w{5,32}$/, 'must be the bot username without @')
+      .optional()
+  ),
+});
+
+/** Dashboard settings travel together: a base URL without a signing secret is a config error. */
+export const envSchema = baseEnvSchema.superRefine((env, ctx) => {
+  if (env.DASHBOARD_BASE_URL && !env.DASHBOARD_LINK_SECRET) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['DASHBOARD_LINK_SECRET'],
+      message: 'is required when DASHBOARD_BASE_URL is set',
+    });
+  }
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;
