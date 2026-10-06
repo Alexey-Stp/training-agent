@@ -1,5 +1,6 @@
-import { addDaysIso, SEASON_NEW_START_PAYLOAD } from '@triathlon/core';
-import { dayLabel, formatMinutes, sportIcon } from '../plan/dates';
+import { addDaysIso, SEASON_NEW_START_PAYLOAD, type ReadinessVerdict } from '@triathlon/core';
+import { dayLabel, formatMinutes, localTime, sportIcon } from '../plan/dates';
+import { renderComparison } from './compare';
 import type { DaySession } from '../plan/read-store';
 import { stepLine } from '../plan/steps';
 import { esc, tag } from '../views/html';
@@ -42,13 +43,21 @@ function renderSteps(session: DaySession): string {
   return '<ol class="steps">' + items.join('') + '</ol>';
 }
 
-function timeLabel(date: string, today: string): string {
-  return date === today ? 'Any time today' : 'Any time';
+interface DayView {
+  date: string;
+  today: string;
+  timezone: string;
 }
 
-function renderSession(session: DaySession, date: string, today: string): string {
+/** Sessions have no planned start time; a matched activity has a real one */
+function timeLabel(session: DaySession, day: DayView): string {
+  if (session.activity) return 'Started ' + localTime(session.activity.startTime, day.timezone);
+  return day.date === day.today ? 'Any time today' : 'Any time';
+}
+
+function renderSession(session: DaySession, day: DayView): string {
   const meta = [
-    '<span>🕒 ' + esc(timeLabel(date, today)) + '</span>',
+    '<span>🕒 ' + esc(timeLabel(session, day)) + '</span>',
     '<span>⏱ ' + esc(formatMinutes(session.durationMin)) + '</span>',
     '<span>' + esc(session.intensity.toUpperCase()) + '</span>',
   ];
@@ -60,6 +69,7 @@ function renderSession(session: DaySession, date: string, today: string): string
     tag('h2', null, esc(sportIcon(session.sport) + ' ' + session.title)),
     statusBadges(session),
     tag('div', 'meta', meta.join('')),
+    renderComparison(session, day.timezone),
     renderSteps(session),
     notes,
     '</article>',
@@ -94,13 +104,18 @@ function renderDayNav(date: string, today: string): string {
   return '<nav class="pager" aria-label="Days">' + prev + middle + next + '</nav>';
 }
 
+function renderReadiness(verdict: ReadinessVerdict | null): string {
+  if (!verdict) return '';
+  return '<p class="card" role="status">' + esc(verdict.emoji + ' ' + verdict.sentence) + '</p>';
+}
+
 function renderBody(
   model: Exclude<TodayModel, { kind: 'no_profile' }>,
   options: TodayViewOptions
 ): string {
   switch (model.kind) {
     case 'sessions':
-      return model.sessions.map((s) => renderSession(s, model.date, model.today)).join('\n');
+      return model.sessions.map((s) => renderSession(s, model)).join('\n');
     case 'rest':
       return '<div class="card"><h2>😴 Rest day</h2><p class="muted">Nothing planned. Recover well.</p></div>';
     case 'no_plan':
@@ -125,6 +140,7 @@ export function renderToday(model: TodayModel, options: TodayViewOptions): strin
     model.date === model.today ? 'Today · ' + dayLabel(model.date) : dayLabel(model.date);
   const body = [
     '<h1>' + esc(heading) + '</h1>',
+    renderReadiness(model.readiness),
     renderBody(model, options),
     renderDayNav(model.date, model.today),
   ].join('\n');

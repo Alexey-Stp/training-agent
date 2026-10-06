@@ -3,7 +3,6 @@ import type {
   ActivitySummary,
   Compliance,
   HistoryDay,
-  HrvBaseline,
   PlannedSessionSummary,
   SportCompliance,
   TrainingLoad,
@@ -11,10 +10,8 @@ import type {
   WellnessTrend,
 } from './types';
 
-/** Days before `date` the HRV baseline averages over (today excluded) */
-export const HRV_BASELINE_DAYS = 30;
-/** Fewer HRV readings than this in the baseline window and no baseline is reported */
-export const HRV_MIN_SAMPLES = 7;
+// The HRV baseline moved to core (TA-56) so the web dashboard can use it without this package
+export { HRV_BASELINE_DAYS, HRV_MIN_SAMPLES, hrvBaseline } from '@triathlon/core';
 /** Wellness trend length, today included */
 export const TREND_DAYS = 7;
 /** Compliance window: the days before `date` */
@@ -47,34 +44,6 @@ function mean(values: number[]): number {
 function averageOf(values: (number | null)[]): number | null {
   const present = values.filter((v): v is number => v !== null);
   return present.length > 0 ? mean(present) : null;
-}
-
-/**
- * HRV against its rolling baseline: mean and population SD of the readings in the
- * `HRV_BASELINE_DAYS` days before `date`. Today is low when it is below mean − 1 SD.
- */
-export function hrvBaseline(rows: WellnessDay[], date: string): HrvBaseline {
-  const from = addDaysIso(date, -HRV_BASELINE_DAYS);
-  const samples = rows.flatMap((row) =>
-    row.date >= from && row.date < date && row.hrv !== null ? [row.hrv] : []
-  );
-  const today = rows.find((row) => row.date === date)?.hrv ?? null;
-  if (samples.length < HRV_MIN_SAMPLES) {
-    return {
-      status: 'insufficient',
-      samples: samples.length,
-      mean: null,
-      sd: null,
-      today,
-      low: false,
-    };
-  }
-  const m = mean(samples);
-  const sd = Math.sqrt(mean(samples.map((v) => (v - m) ** 2)));
-  if (today === null) {
-    return { status: 'no_today', samples: samples.length, mean: m, sd, today, low: false };
-  }
-  return { status: 'ok', samples: samples.length, mean: m, sd, today, low: today < m - sd };
 }
 
 /** True when the day has any device/ICU reading (the athlete check-in alone does not count). */
