@@ -897,12 +897,14 @@ export const briefProfileRepo: BriefProfileRepo = {
       where: { id: userId },
       select: {
         telegramId: true,
-        profile: { select: { timezone: true, briefTime: true, closeoutTime: true } },
+        profile: {
+          select: { timezone: true, briefTime: true, closeoutTime: true, notifyChatId: true },
+        },
       },
     });
     if (!row?.profile) return null;
     return {
-      telegramChatId: Number(row.telegramId),
+      telegramChatId: Number(row.profile.notifyChatId ?? row.telegramId),
       timezone: row.profile.timezone,
       briefTime: row.profile.briefTime,
       closeoutTime: row.profile.closeoutTime,

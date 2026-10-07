@@ -20,7 +20,7 @@ jobs:
 
     strategy:
       matrix:
-        service: [bot, worker]
+        service: [bot, worker, web]
 
     steps:
       - name: Checkout code
@@ -49,7 +49,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: ./apps/${{ matrix.service }}/Dockerfile

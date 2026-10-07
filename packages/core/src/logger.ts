@@ -23,6 +23,15 @@ export const LOG_REDACT_PATHS = [
   '*.message.text',
   'headers.authorization',
   '*.headers.authorization',
+  // Dashboard magic-link tokens and session cookies (TA-52)
+  'token',
+  '*.token',
+  'cookie',
+  '*.cookie',
+  'headers.cookie',
+  '*.headers.cookie',
+  'query.t',
+  '*.query.t',
 ];
 
 export const LOG_REDACT_CENSOR = '[REDACTED]';

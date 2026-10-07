@@ -109,6 +109,7 @@ jobs:
           test -d packages/core/dist || exit 1
           test -d apps/bot/dist || exit 1
           test -d apps/worker/dist || exit 1
+          test -d apps/web/dist || exit 1
 
   docker-build:
     name: Docker Build Test
@@ -125,7 +126,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Build bot image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: ./apps/bot/Dockerfile
@@ -135,12 +136,22 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build worker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: ./apps/worker/Dockerfile
           push: false
           tags: triathlon-worker:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build web image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: ./apps/web/Dockerfile
+          push: false
+          tags: triathlon-web:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -203,6 +214,11 @@ jobs:
           npx prisma db execute --stdin <<EOF
           SELECT 1;
           EOF
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/triathlon_coach_test
+
+      - name: Web dashboard read-only check
+        run: npm -w @triathlon/web run test:integration
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/triathlon_coach_test
 

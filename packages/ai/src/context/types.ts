@@ -1,4 +1,5 @@
 import type {
+  HrvBaseline,
   Intensity,
   PowerZone,
   Race,
@@ -95,18 +96,8 @@ export interface SeasonPosition {
   daysToARace: number | null;
 }
 
-export type HrvBaselineStatus = 'ok' | 'insufficient' | 'no_today';
-
-export interface HrvBaseline {
-  status: HrvBaselineStatus;
-  /** HRV samples in the 30 days before `date` */
-  samples: number;
-  mean: number | null;
-  sd: number | null;
-  today: number | null;
-  /** today < mean − 1 SD */
-  low: boolean;
-}
+// The HRV baseline lives in core (TA-56): the dashboard's readiness line uses it too
+export type { HrvBaseline, HrvBaselineStatus } from '@triathlon/core';
 
 export interface WellnessTrend {
   /** Oldest first; days without a row are kept with null metrics */

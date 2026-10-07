@@ -51,3 +51,6 @@ export function parseSeasonDecision(
   if (!DECISIONS.has(decision) || !DRAFT_ID_RE.test(draftId)) return null;
   return { decision: decision as SeasonDecision, draftId };
 }
+
+/** `t.me/<bot>?start=season_new` (the dashboard's "No plan yet" link) opens the wizard */
+export const SEASON_NEW_START_PAYLOAD = 'season_new';

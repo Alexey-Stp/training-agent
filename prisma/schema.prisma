@@ -46,6 +46,7 @@ model Profile {
   briefTime     String? // HH:mm local time of the morning brief; NULL uses DAILY_BRIEF_DEFAULT_TIME
   closeoutTime  String? // HH:mm local time of the evening close-out; NULL uses EVENING_CLOSEOUT_DEFAULT_TIME
   lthr          Int?    // lactate threshold heart rate (bpm): the close-out's HR intensity guess
+  notifyChatId  BigInt? // chat for scheduled messages (briefs, reviews); NULL uses the private chat (User.telegramId)
   updatedAt     DateTime @updatedAt
 
   @@index([userId])

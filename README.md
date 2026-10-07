@@ -80,12 +80,20 @@ See [CI_CD.md](CI_CD.md) for complete CI/CD documentation.
 │   │   │   └── logger.ts     # Pino logger
 │   │   ├── Dockerfile
 │   │   └── package.json
-│   └── worker/           # Background job processor
+│   ├── worker/           # Background job processor
+│   │   ├── src/
+│   │   │   ├── index.ts      # Worker entry point
+│   │   │   ├── handlers.ts   # Command handlers
+│   │   │   ├── db.ts         # Database utilities
+│   │   │   └── logger.ts     # Pino logger
+│   │   ├── Dockerfile
+│   │   └── package.json
+│   └── web/              # Athlete web dashboard (Express, server-rendered)
 │       ├── src/
-│       │   ├── index.ts      # Worker entry point
-│       │   ├── handlers.ts   # Command handlers
-│       │   ├── db.ts         # Database utilities
-│       │   └── logger.ts     # Pino logger
+│       │   ├── index.ts      # HTTP server entry point
+│       │   ├── app.ts        # createApp(deps): routes and middleware
+│       │   ├── auth/         # Magic-link sign-in, sessions, guard
+│       │   └── views/        # HTML templates and the stylesheet
 │       ├── Dockerfile
 │       └── package.json
 ├── packages/
@@ -441,6 +449,21 @@ The worker exposes job metrics and can alert an admin when a morning brief keeps
 - **Failure alert.** After `BRIEF_FAILURE_ALERT_THRESHOLD` (3) final daily-brief failures in a row for one athlete (retries do not count), the chat `ADMIN_TELEGRAM_ID` gets one message. It is sent once per incident; a successful brief ends the incident. Leave `ADMIN_TELEGRAM_ID` empty to turn the alert off.
 - **Bull Board.** `BULL_BOARD_ENABLED=true` serves a queue inspector at `http://127.0.0.1:9101/admin/queues` (`BULL_BOARD_PORT`). It can retry and delete jobs, so it binds to loopback only and docker-compose does not publish it. Use it for local development.
 
+## Web dashboard
+
+`apps/web` is a mobile-first web page for athletes. It is rendered on the server and has no client JavaScript.
+
+- **Sign-in.** Send `/dashboard` to the bot. The reply has an "Open dashboard" button with a one-time link to `DASHBOARD_BASE_URL/auth?t=…`. The link is signed with `DASHBOARD_LINK_SECRET` and expires after `DASHBOARD_LINK_TTL_MINUTES` (15). Opening it starts a session that lasts `DASHBOARD_SESSION_TTL_HOURS` (168) and is kept in Redis behind an HttpOnly cookie. There are no passwords.
+- **Expired or tampered links.** A missing, tampered, expired or already used link, or a missing session, gets a 401 "Link expired" page and a `dashboard auth rejected` warning with the token id and the reason. No athlete data is rendered.
+- **Today.** `/` (or `/today?date=yyyy-MM-dd`) shows the stored plan for one local day, read from the same `PlannedSession` rows the bot and the intervals.icu push use, so it never regenerates the plan. Each session shows its title, "Any time today" (sessions have no planned start time), the total duration and the interval steps (warmup, main set as `5 × 3′ Z5 / 3′ Z1 easy`, cooldown). A session you changed in intervals.icu gets an "edited in intervals.icu" badge. Once the evening close-out has matched an activity, the session is marked completed and shows planned vs actual side by side: duration (with the deviation), zone (guessed from power or HR) and start time, plus distance, average power and HR when available. A missed session gets a "Missed" badge. Today also shows the morning brief's readiness line (check-in, HRV against the 30-day baseline, form). With nothing planned that day it shows a "Rest day" card. With no active season and no stored sessions within a week either side, it shows "No plan yet" with a `t.me/<TELEGRAM_BOT_USERNAME>?start=season_new` link that opens the season wizard.
+- **Week.** `/week` shows the local Monday–Sunday week as 7 cells: sport icons and total planned time per day (or "Rest"), a ✓ when every session of the day is completed, and today highlighted. Tap a cell to open that day in Today. `/week?week=2026-W42` and the pager move between ISO weeks.
+- **Settings.** `/settings` edits FTP, threshold HR, timezone, brief and close-out times, swim/bike/run day preferences, and the Telegram chat for briefs and reviews. Every field is validated on the server: an invalid form is shown again with a message per field, and nothing is saved. Saving queues a `profile-reschedule` job, so the worker re-registers the brief, close-out and review schedulers with the new time and timezone. Commands read the profile directly, so `/plan` uses a new FTP right away.
+- **Notification chat.** Empty means your private chat with the bot. For a group or channel, add the bot there first (as an admin in a channel) and enter the chat id, e.g. `-1001234567890`. The bot posts a test message before the id is saved. Scheduled messages (brief, close-out, reviews, race briefs) go there; replies to commands still go to the chat you typed them in.
+- **Off by default.** Leave `DASHBOARD_BASE_URL` empty and `/dashboard` answers that the dashboard is not set up.
+- **Deploying it.** Requests are rate limited per client (20 per 15 minutes for sign-in, 600 for pages; in-memory, so one instance). Serve it over HTTPS (a reverse proxy in front of `WEB_PORT`): outside `NODE_ENV=development` the session cookie is `Secure`, so it is not sent over plain http. Pages carry a strict CSP (no scripts), `Referrer-Policy: no-referrer` and `Cache-Control: no-store`.
+- **Guarantees, covered by tests.** Every query is scoped to the signed-in athlete, and a forged identifier never shows another athlete's data. Today and Week only read: row counts and `updatedAt` stay unchanged across repeated loads (checked against Postgres in CI), and only the Settings POST writes. Pages are under 30 KB with no JavaScript; a Lighthouse mobile run scored 100 for performance, accessibility and best practices.
+- **Running it.** `npm run dev:web` serves it on `WEB_PORT` (3000), and docker-compose runs it as the `web` service. `GET /healthz` returns 200.
+
 ## intervals.icu Integration
 
 `packages/integrations-icu` (`@triathlon/integrations-icu`) is a typed REST client for [intervals.icu](https://intervals.icu). The worker uses it to validate credentials in `/connect icu` and to sync activities and wellness.
@@ -557,7 +580,7 @@ pnpm install
 ### 4. Run with Docker Compose
 
 ```bash
-# Start all services (postgres, redis, bot, worker)
+# Start all services (postgres, redis, bot, worker, web)
 docker compose up --build
 
 # First time: Apply database migrations in another terminal
@@ -620,6 +643,9 @@ npm run dev:bot
 
 # Terminal 4: Start worker
 npm run dev:worker
+
+# Terminal 5: Start the web dashboard (http://localhost:3000, sign in with /dashboard)
+npm run dev:web
 ```
 
 ### Database Management

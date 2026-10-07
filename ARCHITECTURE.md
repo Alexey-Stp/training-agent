@@ -126,6 +126,39 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 
 **Concurrency**: Currently 5 concurrent jobs. Can be increased for higher throughput.
 
+### Web Service (`apps/web`)
+
+**Responsibility**: The athlete-facing web dashboard. It is read-mostly: it reads plan and training data and writes only settings.
+
+**Key Files**:
+
+- `index.ts` - Express 5 server on `WEB_PORT`, with Prisma and Redis wiring
+- `app.ts` - `createApp(deps)`: security headers, `/healthz`, `/app.css`, the auth routes and the guarded pages. Dependencies are injected so tests run with in-memory fakes on an ephemeral port
+- `auth/routes.ts` - `GET /auth?t=` (magic link) and `POST /logout`
+- `auth/guard.ts` - `requireSession` (session cookie → Redis session → user exists, else a 401 page plus a `dashboard auth rejected` warning) and `requireCsrf`
+- `auth/session-store.ts` - `RedisSessionStore`: `web:session:<id>` holds `{userId, csrf}` with a TTL, and `web:link:<jti>` (`SET NX`) is the one-time-use guard
+- `views/` - HTML templates (plain functions, `esc()` for every dynamic value) and the single hashed stylesheet
+- `plan/` - the read side: `read-store.ts` `DashboardReadRepo`, which has no write methods (Prisma `createDashboardReadRepo` in `db.ts` uses only `findUnique`/`findFirst`/`findMany`, all by `userId`, and skips tombstones), `steps.ts` (`parseSteps` validates the stored `WorkoutBlock[]` JSON and never throws; `stepLine` turns it into text), and `dates.ts`
+- `today/` - `loadToday(userId, date)` returns `sessions`, `rest` (nothing that day, but an active season or stored sessions within ±7 days), `no_plan` or `no_profile`. On local today it also reads 30 days of `Wellness` for core `readinessVerdict` + `hrvBaseline` (moved from the worker and ai to core, so the line matches the brief). `compare.ts` renders planned vs actual for a session with a matched `Activity` (`plannedSessionId`, set by the evening close-out), using the stored `deviationPct`/`actualIntensity`. `view.ts` renders the cards, badges (`modified_externally` → "edited in intervals.icu", `completed`, `skipped` → "Missed") and the day pager
+- `week/` - `loadWeek(userId, week)`: the local ISO week (core `isoWeekKey`/`isoWeekRange` of `localToday`, or `?week=`), one `findSessions` call, then 7 `DayCell`s (sports, total minutes without rest rows, `done` when every session is completed, `isToday`). Each cell links to `/today?date=`
+- `settings/` - the Settings page: `validate.ts` (pure server-side validation of every field), `routes.ts` (GET, and POST with CSRF; 400 with field errors, or save then 303 `?saved=1`), `view.ts`. Adapters: `db.ts` `createSettingsRepo` (the app's only write: `Profile` by `userId`), `telegram.ts` (a new notification chat must pass `getChat` and a test message before it is saved), and `queue.ts` (queues `profile-reschedule` on `profile-settings`)
+
+**Settings changes reach the schedulers** through the worker. `profile-reschedule` (`apps/worker/src/profile-reschedule.ts`, registered in `jobs/registry.ts`) re-runs the combined per-connection scheduler (`athleteSchedulers` in `index.ts`, the same one `/connect icu` uses) for a linked athlete. Each scheduler re-reads `findBriefProfile`, so the brief time, close-out time, timezone and `Profile.notifyChatId` (`notifyChatId ?? telegramId`) take effect from the next run.
+
+The "No plan yet" card links to `t.me/<TELEGRAM_BOT_USERNAME>?start=season_new`. The bot's season wizard treats `/start season_new` like `/season new` (core `SEASON_NEW_START_PAYLOAD`).
+
+**Sign-in flow**:
+
+1. `/dashboard` is handled by the worker (`dashboard-command.ts`). It signs a token for `User.id` with core `signMagicLink` (`magic-link.ts`: `base64url(payload).base64url(HMAC-SHA256)`, payload `{v, jti, uid, exp}`) and replies with a URL button, so the token never appears in the chat text.
+2. `GET /auth?t=` runs `verifyMagicLink`: shape, a constant-time signature check, then expiry. It then consumes `jti` once and checks that the user exists. On success it creates the session, sets the cookie and redirects with 303 to `/`, so the token leaves the address bar.
+3. Every page route goes through `requireSession` and takes the user id from the session only. Routes never accept a user identifier.
+
+**Design Principles**:
+
+- Server-rendered, mobile-first (about 390px), no client JavaScript; the CSP is `default-src 'none'; style-src 'self'`
+- `Referrer-Policy: no-referrer` and `Cache-Control: no-store` on pages
+- Every query is scoped by the session's `userId`
+
 ### Core Package (`packages/core`)
 
 **Responsibility**: Shared business logic, types, rules engine.
@@ -239,7 +272,7 @@ This is a production-ready Triathlon Coach Telegram bot built with clean archite
 
 **Migrations**: `prisma/migrations/` starts with `0_init` (baseline of the pre-TA-9 schema), followed by `1_icu_connection`, `2_activity`, `3_wellness` (creates `Wellness`, copies `Fatigue.readiness` → `subjectiveReadiness` and `Fatigue.sleepScore` → `sleepScore`, then drops `Fatigue`, all in one transaction), `4_planned_session` and `5_season_plan`. Apply with `npm run db:deploy`. A database created earlier with `db push` must be baselined once: `npx prisma migrate resolve --applied 0_init`, then `npm run db:deploy`.
 
-**Migration series (TA-50)**: the folders apply in name order (`0_init` … `9a` … `9i`), which is a string sort, so there is no `10_…`: it would run before `2_…`. Pick the next letter suffix (`9j_…`) instead. `Fatigue` was folded into `Wellness` by `3_wellness` and no longer exists. Three pieces guard the series:
+**Migration series (TA-50)**: the folders apply in name order (`0_init` … `9a` … `9j`), which is a string sort, so there is no `10_…`: it would run before `2_…`. Pick the next letter suffix (`9k_…`) instead. `Fatigue` was folded into `Wellness` by `3_wellness` and no longer exists. Three pieces guard the series:
 
 - `apps/worker/test/schema-migration-set.test.ts` (PGlite): a fresh deploy creates a table for every model, a legacy DB with `Fatigue` rows upgrades through every later migration with equal row counts, and the index list in `scripts/db-expectations.ts` holds.
 - The CI `migrations` job runs `prisma migrate deploy` on an empty Postgres, `prisma migrate diff --exit-code` (schema.prisma must have no change that lacks a migration), `npm run db:seed` and `npm run db:verify` (`scripts/verify-db.ts`: all migrations finished, tables, indexes, seed counts).
@@ -643,7 +676,7 @@ runDailyBrief (apps/worker/src/daily-loop/pipeline.ts)
 - **Idempotency** (`DailyBriefRun`, unique `(userId, date)`, migration `9_daily_brief`). `claim` inserts the row (`skipDuplicates`) and takes it over with one conditional `updateMany`: pending or failed, or running with `startedAt` older than the 5-minute lease. The job backoff (2 and 4 minutes) outlasts the lease, so a retry after a crash takes the run over. Saving the brief and its decision id before sending means a retry never writes a second `CoachDecision`.
 - **Timings.** Every stage logs `{ userId, date, stage, ms, outcome }` (`daily brief stage`), and the run ends with one `daily brief finished` log. The timings of the latest attempt are stored in `DailyBriefRun.stageTimings`.
 - The pipeline takes its stages as injected deps (`syncWellness`, `syncActivities`, `sendMessage`, repos, `now`), so the tests need no Redis, Prisma, ICU or Telegram.
-- **Brief message** (`daily-loop/render.ts`, snapshot-tested). The readiness line (`daily-loop/readiness.ts`) is deterministic: worst of check-in readiness (≤ 2/5 red, like `ReadinessDownshift`), HRV vs the 30-day baseline and TSB (below −20), ⚪ without data. Proposed changes are one line per session (ai `describeSessionChanges`, e.g. `Bike VO2 5x4 70′→50′, Z5→Z3`). Apply / Keep plan only when there are changes; Discuss always.
+- **Brief message** (`daily-loop/render.ts`, snapshot-tested). The readiness line (core `readiness.ts` `readinessVerdict`, also shown on the dashboard) is deterministic: worst of check-in readiness (≤ 2/5 red, like `ReadinessDownshift`), HRV vs the 30-day baseline and TSB (below −20), ⚪ without data. Proposed changes are one line per session (ai `describeSessionChanges`, e.g. `Bike VO2 5x4 70′→50′, Z5→Z3`). Apply / Keep plan only when there are changes; Discuss always.
 - **Check-in** (`daily-loop/checkin.ts`, `checkin-answer.ts`, migration `9b_daily_checkin`). `checkInReason` is pure: no row or no device data → `no_data`, HRV more than 1 SD off the 30-day mean in either direction → `hrv_deviation` (too few readings for a baseline never triggers), a day with both answers → none. The buttons carry `ci:r:<1-5>` / `ci:s:<0-2>` (core `checkin.ts`; soreness none=0, mild=1, severe=2, rendered as the label in the prompt). The bot enqueues `checkin_answer` with a per-button job id and leaves the buttons; the worker finds the run by `DailyBriefRun.checkInMessageId`, writes only the subjective column (`checkInRepo.recordCheckIn`: first answer wins) and edits the message to the remaining question. These taps skip the `ProcessedMessage` check, because both answers share one message id. With both answers in while the run is `awaiting_checkin`, it promotes the delayed continuation job; otherwise that job fires at the timeout. Late answers are still stored. Wellness sync never touches these columns (`WELLNESS_DEVICE_FIELDS`).
 - **Answering a brief.** The buttons use the coach-chat answer flow above. For a daily decision the result replaces the tapped brief: the worker edits the message (`RichReply.editTapped`, `CommandJob.messageId` is the tapped message) to the stored `DailyBriefRun.briefText` plus the result, without buttons. Discuss sends a new message instead.
 
@@ -836,6 +869,14 @@ runPostRaceJob (apps/worker/src/races/post-race.ts)
 - All loggers come from `createLogger()` in core, with pino `redact` on `LOG_REDACT_PATHS` (`apiKey`, `icuCredentials`, `rawText`, `args`, `message.text`, `authorization` headers, …)
 - The bot logs update metadata only (ids, text length), never message text
 - Covered by `packages/core/test/logger.test.ts`
+- Dashboard tokens and cookies (`token`, `cookie`, `query.t`) are redacted too
+
+✅ **Dashboard Sign-in**
+
+- Magic links are HMAC-SHA256 signed (`DASHBOARD_LINK_SECRET`, at least 32 characters), short-lived (`DASHBOARD_LINK_TTL_MINUTES`) and work once (Redis `SET NX` on the token id)
+- Sessions live server-side in Redis behind an `HttpOnly; SameSite=Lax; Secure` cookie, and POST forms carry a per-session CSRF token
+- Rejections log `{ tokenId, reason }` and never render athlete data
+- Rate limited per client (`express-rate-limit`, `apps/web/src/rate-limit.ts`): 20 requests per 15 minutes on `/auth` and `/logout`, 600 on everything else except `/healthz`; a 429 page and a `dashboard rate limited` warning follow. The counters live in this process, so several web instances would need a shared store such as `rate-limit-redis`
 
 ### Recommended Additions
 
@@ -910,6 +951,14 @@ docker compose logs -f worker | datadog-agent
 - Rules engine (5+ test cases)
 - Edge cases and interactions
 - Run with `npm test`
+
+✅ **Web dashboard** (`apps/web/test/`, `apps/web/test-integration/`)
+
+- HTTP tests start `createApp` on an ephemeral port with in-memory fakes (`test/harness.ts`) and call it with `fetch`
+- **Auth** (`auth.test.ts`): a missing, malformed, tampered, expired, replayed or disabled link, or a missing or unknown session, gets a 401 page, a `{tokenId, reason}` warning and no data. The token is never logged
+- **Isolation** (`isolation.test.ts`): two athletes. A user id in the query or body, B's dates or weeks, a forged cookie, or B's link signed with another key never shows B's data, and every repo call carries A's `userId`
+- **Read-only** (`read-only.test.ts`): the real Prisma repos run on a recording client that throws on anything but `findUnique`/`findFirst`/`findMany`. 40 Today/Week loads issue zero writes, and every training query has `where.userId` of the session. `test-integration/read-only.int.test.ts` (`npm -w @triathlon/web run test:integration`, CI `integration` job) seeds the demo athlete in Postgres and checks that the `PlannedSession`/`Activity`/`Wellness` row counts and newest `updatedAt` are unchanged after repeated loads
+- **Mobile** (`mobile.test.ts`): each page plus the stylesheet is under 30 KB, has no scripts, has the viewport meta, uses no fixed width above 390 px, and labels every form field. A Lighthouse mobile run (Today, Week, Settings, with fakes) scored 100 performance, 100 accessibility and 100 best practices (FCP about 1 s, CLS 0)
 
 ### Recommended Additions
 
