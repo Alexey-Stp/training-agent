@@ -13,7 +13,7 @@
     "@prisma/client": "^7.10.0",
     "@triathlon/core": "*",
     "bullmq": "^6.3.11",
-    "dotenv": "^18.0.5",
+    "dotenv": "^18.0.7",
     "grammy": "^1.46.0",
     "ioredis": "^6.0.0",
     "pino": "^10.3.1",
