@@ -1,3 +1,4 @@
+import { PrismaPg } from '@prisma/adapter-pg';
 import {
   PrismaClient,
   type BlockReviewRun as BlockReviewRunRow,
@@ -8,6 +9,7 @@ import {
   type WeeklyReviewRun as WeeklyReviewRunRow,
 } from '@prisma/client';
 import {
+  getConfig,
   Intensity,
   RacePriority,
   RaceType,
@@ -77,7 +79,9 @@ import {
   type WellnessRepo,
 } from './wellness-sync';
 
+// Prisma 7 has no built-in driver, so the client connects through the pg adapter
 export const prisma = new PrismaClient({
+  adapter: new PrismaPg({ connectionString: getConfig().DATABASE_URL }),
   log: [
     { level: 'warn', emit: 'event' },
     { level: 'error', emit: 'event' },
