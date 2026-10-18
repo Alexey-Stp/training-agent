@@ -1,10 +1,12 @@
 name: CI
 
 on:
+  # main pushes run CI through deploy.yml (workflow_call), which deploys only when it passes
   push:
-    branches: [main, develop]
+    branches: [develop]
   pull_request:
     branches: [main, develop]
+  workflow_call:
 
 jobs:
   lint-and-typecheck:

@@ -1,0 +1,93 @@
+name: Deploy
+
+# Deploys to Railway (project triathlon-coach, environment production) on a push to main, after CI
+# (ci.yml as a reusable workflow) passes for that commit. Each service builds from its Dockerfile
+# per apps/<service>/railway.json; the worker's pre-deploy runs `prisma migrate deploy`, so it goes
+# first and bot/web follow.
+#
+# Fork safety: only push (to main) and workflow_dispatch trigger this workflow, never
+# pull_request_target or workflow_run, so the checked-out code is always a commit on main of this
+# repo. The production environment adds a server-side rule: only main may deploy (repo settings).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: CI
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ci.yml
+
+  deploy-worker:
+    name: Deploy worker
+    needs: ci
+    runs-on: ubuntu-latest
+    environment: production
+    # Official Railway CLI image (pinned): no npm install, so no package lifecycle scripts run
+    container: ghcr.io/railwayapp/cli:5.64.2
+    steps:
+      # No GITHUB_TOKEN in .git/config: railway up uploads the working directory
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # --ci streams the build logs and fails the job when the build fails
+      - name: Deploy to Railway
+        run: railway up --ci --service worker --environment production
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+  deploy-apps:
+    name: Deploy ${{ matrix.service }}
+    needs: deploy-worker
+    runs-on: ubuntu-latest
+    environment: production
+    container: ghcr.io/railwayapp/cli:5.64.2
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [bot, web]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Deploy to Railway
+        run: railway up --ci --service "${SERVICE}" --environment production
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          SERVICE: ${{ matrix.service }}
+
+  notify:
+    name: Notify Telegram
+    needs: [deploy-worker, deploy-apps]
+    if: always() && needs.deploy-worker.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send deploy result
+        run: |
+          if [ "$WORKER_RESULT" = "success" ] && [ "$APPS_RESULT" = "success" ]; then
+            TITLE="*Triathlon Coach deployed*"
+          else
+            TITLE="*Triathlon Coach deploy failed* (worker: ${WORKER_RESULT}, bot/web: ${APPS_RESULT})"
+          fi
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d parse_mode="Markdown" \
+            --data-urlencode text="${TITLE} ${DEPLOY_SHA:0:7}
+          ${RUN_URL}"
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          WORKER_RESULT: ${{ needs.deploy-worker.result }}
+          APPS_RESULT: ${{ needs.deploy-apps.result }}
+          DEPLOY_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

@@ -28,6 +28,7 @@ COPY --from=deps /app/node_modules ./node_modules
 # Copy source code
 COPY package*.json ./
 COPY tsconfig.base.json ./
+COPY prisma.config.ts ./
 COPY prisma ./prisma
 COPY packages/core ./packages/core
 COPY packages/integrations-icu ./packages/integrations-icu
@@ -68,6 +69,8 @@ COPY --from=builder /app/packages/ai/package.json ./packages/ai/
 COPY --from=builder /app/apps/worker/dist ./apps/worker/dist
 COPY --from=builder /app/apps/worker/package.json ./apps/worker/
 COPY --from=builder /app/prisma ./prisma
+# Railway's pre-deploy runs `prisma migrate deploy` from /app with the pinned CLI in node_modules
+COPY --from=builder /app/prisma.config.ts ./
 COPY --from=builder /app/package.json ./
 
 # Run as non-root user

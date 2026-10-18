@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { Bot } from 'grammy';
 import Redis from 'ioredis';
-import { COACH_CHAT_COMMAND, getConfig, getEncKeys } from '@triathlon/core';
+import { COACH_CHAT_COMMAND, getConfig, getEncKeys, redisConnectionOptions } from '@triathlon/core';
 import type { CommandJob } from '@triathlon/core';
 import { commandQueue, enqueueCommand } from './queue';
 import { logger } from './logger';
@@ -20,7 +20,7 @@ const [encKey] = getEncKeys(config);
 
 const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
 
-const redis = new Redis({ host: config.REDIS_HOST, port: config.REDIS_PORT });
+const redis = new Redis(redisConnectionOptions(config));
 const dialogStore = new RedisDialogStore(redis);
 const seasonDialogStore = new RedisSeasonDialogStore(redis);
 

@@ -11,6 +11,8 @@ export const BRIEF_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 const baseEnvSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   DATABASE_URL: z.string().url(),
+  // redis://user:pass@host:port (rediss:// for TLS); wins over REDIS_HOST/REDIS_PORT (local dev)
+  REDIS_URL: z.string().url().optional(),
   REDIS_HOST: z.string().default('localhost'),
   REDIS_PORT: z.coerce.number().default(6379),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
