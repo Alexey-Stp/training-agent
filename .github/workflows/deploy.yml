@@ -1,19 +1,15 @@
 name: Deploy
 
-# Deploys to Railway (project triathlon-coach, environment production) after CI passes on main.
-# Each service builds from its Dockerfile per apps/<service>/railway.json; the worker's pre-deploy
-# runs `prisma migrate deploy`, so it goes first and bot/web follow.
+# Deploys to Railway (project triathlon-coach, environment production) on a push to main, after CI
+# (ci.yml as a reusable workflow) passes for that commit. Each service builds from its Dockerfile
+# per apps/<service>/railway.json; the worker's pre-deploy runs `prisma migrate deploy`, so it goes
+# first and bot/web follow.
 #
-# Fork safety: this workflow has secrets, so it only ever runs code that is on main of this repo.
-# - workflow_run also fires for fork PRs (CI runs on pull_request, and a fork branch may be named
-#   main), so the gate requires a push event from this repo whose commit is main's HEAD.
-# - The checkout never takes a ref from the event payload: it checks out github.sha, which for
-#   workflow_run and a dispatch from main is main's HEAD.
-# - The production environment adds a server-side rule: only main may deploy (repo settings).
+# Fork safety: only push (to main) and workflow_dispatch trigger this workflow, never
+# pull_request_target or workflow_run, so the checked-out code is always a commit on main of this
+# repo. The production environment adds a server-side rule: only main may deploy (repo settings).
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
+  push:
     branches: [main]
   workflow_dispatch:
 
@@ -25,17 +21,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  ci:
+    name: CI
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ci.yml
+
   deploy-worker:
     name: Deploy worker
-    # A newer push to main gets its own CI run and deploy, so an older head_sha is skipped
-    if: >-
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_repository.full_name == github.repository &&
-       github.event.workflow_run.head_sha == github.sha)
+    needs: ci
     runs-on: ubuntu-latest
     environment: production
     # Official Railway CLI image (pinned): no npm install, so no package lifecycle scripts run
@@ -44,7 +37,6 @@ jobs:
       # No GITHUB_TOKEN in .git/config: railway up uploads the working directory
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.sha }}
           persist-credentials: false
 
       # --ci streams the build logs and fails the job when the build fails
@@ -66,7 +58,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Deploy to Railway
