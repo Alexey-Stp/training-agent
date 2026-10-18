@@ -36,7 +36,7 @@
     "prettier": "^3.9.9",
     "prisma": "^7.10.0",
     "typescript": "^5.3.3",
-    "typescript-eslint": "^8.71.0"
+    "typescript-eslint": "^8.71.1"
   },
   "dependencies": {
     "@prisma/client": "^7.10.0"
