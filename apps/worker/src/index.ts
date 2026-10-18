@@ -14,6 +14,7 @@ import {
   getConfig,
   getEncKeys,
   PROFILE_SETTINGS_QUEUE,
+  redisConnectionOptions,
   SEASON_CANCEL_COMMAND,
   SEASON_CONFIRM_COMMAND,
   SEASON_PREVIEW_COMMAND,
@@ -177,10 +178,7 @@ const config = getConfig();
 const bot = new Bot(config.TELEGRAM_BOT_TOKEN);
 const api = bot.api;
 
-const redisConnection = {
-  host: config.REDIS_HOST,
-  port: config.REDIS_PORT,
-};
+const redisConnection = redisConnectionOptions(config);
 const encKeys = getEncKeys(config);
 
 // intervals.icu sync: per linked athlete, one repeatable activity job, one wellness job,

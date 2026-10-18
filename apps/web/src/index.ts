@@ -3,7 +3,12 @@ import type { Server } from 'node:http';
 import { Queue } from 'bullmq';
 import { Api } from 'grammy';
 import Redis from 'ioredis';
-import { getConfig, PROFILE_SETTINGS_QUEUE, type ProfileRescheduleJob } from '@triathlon/core';
+import {
+  getConfig,
+  PROFILE_SETTINGS_QUEUE,
+  redisConnectionOptions,
+  type ProfileRescheduleJob,
+} from '@triathlon/core';
 import { createApp } from './app';
 import { RedisSessionStore } from './auth/session-store';
 import {
@@ -23,9 +28,10 @@ if (!config.DASHBOARD_LINK_SECRET) {
 }
 
 const prisma = createPrismaClient(config.DATABASE_URL, logger);
-const redis = new Redis({ host: config.REDIS_HOST, port: config.REDIS_PORT });
+const redisConnection = redisConnectionOptions(config);
+const redis = new Redis(redisConnection);
 const profileQueue = new Queue<ProfileRescheduleJob>(PROFILE_SETTINGS_QUEUE, {
-  connection: { host: config.REDIS_HOST, port: config.REDIS_PORT },
+  connection: redisConnection,
 });
 
 const app = createApp({

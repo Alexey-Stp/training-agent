@@ -7,6 +7,7 @@ export * from './magic-link';
 export * from './profile-settings';
 export * from './readiness';
 export * from './logger';
+export * from './redis';
 export * from './workout';
 export * from './planned-session';
 export * from './season';
