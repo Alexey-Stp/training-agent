@@ -39,7 +39,7 @@
     "typescript-eslint": "^8.71.1"
   },
   "dependencies": {
-    "@prisma/client": "^7.10.0"
+    "@prisma/client": "^7.10.1"
   },
   "engines": {
     "node": ">=20.0.0",
