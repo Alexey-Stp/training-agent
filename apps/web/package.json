@@ -11,7 +11,7 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
-    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.0",
     "@triathlon/core": "*",
     "bullmq": "^6.3.15",
